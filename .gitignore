@@ -1,0 +1,5 @@
+/.venv
+.git_old
+/keihan_tracker/__pycache__
+/keihan_tracker.egg-info/
+test.py
