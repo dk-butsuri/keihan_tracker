@@ -241,6 +241,7 @@ class KHTracker:
         #不変データをダウンロード
         if not self.select_station:
             res = await self.web.get("https://www.keihan.co.jp/zaisen/select_station.json")
+            res.raise_for_status()
             self.select_station = SelectStation.model_validate(json.loads(res.text))
             # select_stationから駅データを登録
             for line,line_detail in self.select_station.root.items():
@@ -258,6 +259,7 @@ class KHTracker:
                     )
         if not self.transfer_guide_info:
             res = await self.web.get("https://www.keihan.co.jp/zaisen/transferGuideInfo.json")
+            res.raise_for_status()
             self.transfer_guide_info = TransferGuideInfo.model_validate(json.loads(res.text))
             # transferGuideInfoから乗り換え情報を登録
             for number, transfers in self.transfer_guide_info.root.items():
@@ -266,6 +268,7 @@ class KHTracker:
         
         #列車位置を取得
         res = await self.web.get("https://www.keihan.co.jp/zaisen-up/trainPositionList.json")
+        res.raise_for_status()
         self.train_position_list = trainPositionList.model_validate(json.loads(res.text))
         del res
         
@@ -320,11 +323,13 @@ class KHTracker:
             self.date = self.train_position_list.fileCreatedTime.date() - datetime.timedelta(days=1)
         else:
             self.date = self.train_position_list.fileCreatedTime.date()
+        await self.fetch_dia(False)
 
     async def fetch_dia(self, download:bool):
         "運行ダイヤデータから更新します。ダウンロードは数時間～1日に1回程度が適切でしょう。"
         if download or self.starttime_list == None:
             res = await self.web.get("https://www.keihan.co.jp/zaisen-up/startTimeList.json")
+            res.raise_for_status()
             self.starttime_list = startTimeList.model_validate(json.loads(res.text))
             del res
         # startTimeListからデータを登録
