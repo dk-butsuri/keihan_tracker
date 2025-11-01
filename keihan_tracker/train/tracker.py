@@ -15,6 +15,7 @@ from httpx import AsyncClient
 import json
 from tabulate import tabulate
 import datetime
+import re
 
 class StationData(BaseModel):
     """
@@ -121,7 +122,7 @@ class TrainData(BaseModel):
     next_station:   Optional[StationData] = None     # 停車中/次に停車する駅
     cars :          int             # 車両数
     destination:    StationData     # 行先駅
-    delay_minutes:  None = None                     # 遅延時間, 未実装
+    delay_minutes:  Optional[int] = None             # 遅延時間
     delay_text:     Optional[MultiLang] = None       # 遅延時間（テキスト）
     direction:      Literal["up","down"]
     route_stations: list[StopStationData] = []      # 経路にある駅リスト
@@ -309,6 +310,8 @@ class KHTracker:
                     self.trains[wdf].next_station = self.stations[train.lastPassStation]
 
                 # 遅延情報
+                self.trains[wdf].delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
+
                 self.trains[wdf].delay_text = MultiLang(
                     ja = train.delayMinutes,
                     en = train.delayMinutesEn,
@@ -323,7 +326,15 @@ class KHTracker:
             self.date = self.train_position_list.fileCreatedTime.date() - datetime.timedelta(days=1)
         else:
             self.date = self.train_position_list.fileCreatedTime.date()
-        await self.fetch_dia(False)
+        
+        #ダイア情報を登録
+        if self.starttime_list:
+            if self.starttime_list.fileCreatedTime.date() != self.date:
+                await self.fetch_dia(True)
+            else:
+                await self.fetch_dia(False)
+        else:
+            await self.fetch_dia(True)
 
     async def fetch_dia(self, download:bool):
         "運行ダイヤデータから更新します。ダウンロードは数時間～1日に1回程度が適切でしょう。"
