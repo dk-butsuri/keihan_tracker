@@ -202,3 +202,11 @@ class startTimeList(BaseModel):
     @field_validator("fileCreatedTime", mode="before")
     def validate_time(cls,value) -> datetime.datetime:
         return datetime.datetime.strptime(value,"%Y%m%d%H%M%S")
+
+# FileList.xmlのモデル
+class FileList(BaseModel):
+    time: datetime.datetime
+    traininfo: str
+    image_PC: str
+    image_SP: str
+    html_FP: str

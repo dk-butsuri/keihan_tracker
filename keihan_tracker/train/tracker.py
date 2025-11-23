@@ -1,18 +1,20 @@
 # 遅延情報はデータ形式が不明のため未実装
 
-from .schemes import (TransferGuideInfo, 
+from .schemes import (TransferGuideInfo,
+                      FileList,  
                       SelectStation, 
                       startTimeList, 
                       trainPositionList, 
                       StationConnections, 
                       MultiLang, 
                       TrainType,
-                      LineLiteral
+                      LineLiteral,
                       )
 from pydantic import BaseModel
 from typing import Optional, Literal
 from httpx import AsyncClient
 import json
+import xml.etree.ElementTree as ET
 from tabulate import tabulate
 import datetime
 import re
@@ -182,6 +184,7 @@ class KHTracker:
         self.select_station: Optional[SelectStation] = None          # 路線ごとの駅名データ
         self.starttime_list: Optional[startTimeList] = None          # 列車ごとの駅到着時刻データ
         self.train_position_list: Optional[trainPositionList] = None # 列車の種別・位置・遅延情報データ
+        self.file_list: Optional[FileList] = None
         self.date: datetime.date = datetime.datetime.now().date()    # 日度（始発から終電までを1日とする日付）
         self.web = AsyncClient()
 
@@ -190,8 +193,6 @@ class KHTracker:
         self.trains:dict[int,TrainData] = {}
         ## 駅リスト
         self.stations:dict[int,StationData] = {}
-        
-        
 
 
     def find_trains(
@@ -203,6 +204,8 @@ class KHTracker:
             has_premiumcar: Optional[bool] = None,
             destination:    Optional[StationData] = None,
             next_station:   Optional[StationData] = None,
+            min_delay:      Optional[int] = None,
+            max_delay:      Optional[int] = None
             ) -> list[TrainData]:
         """
         条件に合致する列車を検索してリストで返す。
@@ -230,6 +233,10 @@ class KHTracker:
             if destination and train.destination != destination:
                 continue
             if next_station and train.next_station != next_station:
+                continue
+            if min_delay and (train.delay_minutes or 0) <= min_delay:
+                continue
+            if max_delay and (train.delay_minutes or 0) >= max_delay:
                 continue
             
             trains.append(train)
@@ -337,7 +344,7 @@ class KHTracker:
             await self.fetch_dia(True)
 
     async def fetch_dia(self, download:bool):
-        "運行ダイヤデータから更新します。ダウンロードは数時間～1日に1回程度が適切でしょう。"
+        "startTimeList.jsonを更新する"
         if download or self.starttime_list == None:
             res = await self.web.get("https://www.keihan.co.jp/zaisen-up/startTimeList.json")
             res.raise_for_status()
@@ -400,6 +407,39 @@ class KHTracker:
                 
         return self
 
+    async def fetch_filelist(self):
+        """FileList.xmlを取得する。"""
+        res = await self.web.get("https://www.keihan.co.jp/tinfo/05-flist/FileList.xml")
+        res.raise_for_status()
+        root = ET.fromstring(res.text)
+
+        # 時刻設定
+        t = root.findtext("time")
+        if t:
+            time = datetime.datetime.strptime(t,"%Y%m%d%H%M%S")
+        else:
+            return
+        traininfo = root.findtext("traininfo") or ""
+        image_PC = root.findtext("image_PC") or ""
+        image_SP = root.findtext("image_SP") or ""
+        html_FP = root.findtext("html_FP") or ""
+
+        filelist = FileList(
+            time=time,
+            traininfo=traininfo,
+            image_PC=image_PC,
+            image_SP=image_SP,
+            html_FP=html_FP
+        )
+        self.file_list = filelist
+
+    @property
+    def max_delay_minutes(self) -> int:
+        return max(self.trains.values(), key=lambda x:x.delay_minutes if x.delay_minutes else 0).delay_minutes or 0
+
+    @property
+    def max_delay_train(self) -> TrainData:
+        return max(self.trains.values(), key=lambda x:x.delay_minutes if x.delay_minutes else 0)
 
 if __name__ == "__main__":
     tracker = KHTracker()
