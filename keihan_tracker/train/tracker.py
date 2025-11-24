@@ -328,7 +328,7 @@ class KHTracker:
                 )
 
         # 日付更新
-        if 0 <= self.train_position_list.fileCreatedTime.hour <= 3:
+        if 0 <= self.train_position_list.fileCreatedTime.hour <= 5:
             #深夜帯は-1日することで27時の扱い
             self.date = self.train_position_list.fileCreatedTime.date() - datetime.timedelta(days=1)
         else:
@@ -336,7 +336,7 @@ class KHTracker:
         
         #ダイア情報を登録
         if self.starttime_list:
-            if self.starttime_list.fileCreatedTime.date() != self.date:
+            if (self.starttime_list.fileCreatedTime-datetime.timedelta(hours=5)).date() != self.date:
                 await self.fetch_dia(True)
             else:
                 await self.fetch_dia(False)
