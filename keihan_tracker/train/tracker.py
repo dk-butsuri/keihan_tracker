@@ -60,6 +60,7 @@ class StationData(BaseModel):
         列車のnext_stationの停車時刻とこの駅に停車する時刻を比較する。
         """
         trains:list[tuple[TrainData, StopStationData]] = []
+
         #全ての列車から
         for train, stop in self.trains:
             # next_stationが不明ならスキップ
@@ -116,6 +117,7 @@ class TrainData(BaseModel):
     - 列車番号、種別、編成、行先、停車駅リストなどを保持
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
     """
+    master:     "KHTracker"
     wdfBlockNo: int                 # 列車管理番号
     train_formation:Optional[int] = None            # 編成番号（）
     train_number:   str             # 列車番号（1051号など）
@@ -125,7 +127,7 @@ class TrainData(BaseModel):
     next_station:   Optional[StationData] = None     # 停車中/次に停車する駅
     cars :          int             # 車両数
     destination:    StationData     # 行先駅
-    delay_minutes:  Optional[int] = None             # 遅延時間
+    delay_minutes:  int             # 遅延時間
     delay_text:     Optional[MultiLang] = None       # 遅延時間（テキスト）
     direction:      Literal["up","down"]
     route_stations: list[StopStationData] = []      # 経路にある駅リスト
@@ -153,7 +155,7 @@ class TrainData(BaseModel):
         """列車が停車中かどうか判定します。"""
         line, st1, st2 = calc_position(self.location_col, self.location_row)
         if not st2:
-            if tracker.stations[st1] != self.next_station:
+            if self.master.stations[st1] != self.next_station:
                 raise Exception("next_station属性とcol/rowの分析結果が一致しません。")
             return True
         else:
@@ -182,7 +184,9 @@ class TrainData(BaseModel):
             else:
                 body.append([f"不明",f"{stop.station}"])
         return text + tabulate(body,header)
-
+    
+    # masterの型を許可する
+    model_config = {"arbitrary_types_allowed": True}
 
 class KHTracker:
     """
@@ -314,6 +318,7 @@ class KHTracker:
                 # 存在しないなら新規作成
                 if not wdf in self.trains:
                     self.trains[wdf] = TrainData(
+                        master=self, 
                         wdfBlockNo=wdf,
                         train_number = train.trainNumber,
                         destination = self.stations[train.destStationNumber],
@@ -322,15 +327,13 @@ class KHTracker:
                         cars = train.carsOfTrain,
                         direction = "up" if trainlist.trainDirection == 0 else "down",
                         location_col = trainlist.locationCol,
-                        location_row = trainlist.locationRow
+                        location_row = trainlist.locationRow,
+                        delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
                         )
                 
                 # 次に停車する駅
                 if train.lastPassStation != 99 and train.lastPassStation != 0:
                     self.trains[wdf].next_station = self.stations[train.lastPassStation]
-
-                # 遅延情報
-                self.trains[wdf].delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
 
                 self.trains[wdf].delay_text = MultiLang(
                     ja = train.delayMinutes,
@@ -350,13 +353,13 @@ class KHTracker:
         #ダイア情報を登録
         if self.starttime_list:
             if (self.starttime_list.fileCreatedTime-datetime.timedelta(hours=5)).date() != self.date:
-                await self.fetch_dia(True)
+                await self.regist_dia(True)
             else:
-                await self.fetch_dia(False)
+                await self.regist_dia(False)
         else:
-            await self.fetch_dia(True)
+            await self.regist_dia(True)
 
-    async def fetch_dia(self, download:bool):
+    async def regist_dia(self, download:bool):
         "startTimeList.jsonを更新する"
         if download or self.starttime_list == None:
             res = await self.web.get("https://www.keihan.co.jp/zaisen-up/startTimeList.json")
@@ -401,6 +404,7 @@ class KHTracker:
                 # 停車しない駅
                 if ltime == (99,99):
                     is_stop:bool = False
+                    is_final = False
                     time = None
                 # 停車駅なら
                 else:
