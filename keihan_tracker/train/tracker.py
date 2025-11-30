@@ -10,6 +10,7 @@ from .schemes import (TransferGuideInfo,
                       TrainType,
                       LineLiteral,
                       )
+from position_calculation import calc_position
 from pydantic import BaseModel
 from typing import Optional, Literal
 from httpx import AsyncClient
@@ -130,8 +131,8 @@ class TrainData(BaseModel):
     route_stations: list[StopStationData] = []      # 経路にある駅リスト
 
     # サイト上で列車位置を表示するときのグリッド座標
-    location_col: Optional[int] = None
-    location_row: Optional[int] = None
+    location_col: int
+    location_row: int
 
     # 停車駅リスト
     @property
@@ -146,6 +147,18 @@ class TrainData(BaseModel):
     def start_station(self) -> StationData:
         """始発駅を返します。"""
         return [station for station in self.stop_stations if station.is_start][0].station
+    
+    @property
+    def is_stopping(self) -> bool:
+        """列車が停車中かどうか判定します。"""
+        line, st1, st2 = calc_position(self.location_col, self.location_row)
+        if not st2:
+            if tracker.stations[st1] != self.next_station:
+                raise Exception("next_station属性とcol/rowの分析結果が一致しません。")
+            return True
+        else:
+            return False
+
 
     def get_stop_time(self, station:StationData) -> Optional[datetime.datetime]:
         """駅に停車する時刻を返します。"""
@@ -159,7 +172,7 @@ class TrainData(BaseModel):
         text = f'[{"上り線" if self.direction == "up" else "下り線"}] {"臨時" if self.is_special else ""}{self.train_type.value}{self.train_number}号: {self.destination or "不明"}行き {self.train_formation}系/{self.cars}両編成\n'\
         f'{"プレミアムカー付き /" if self.has_premiumcar else ""}遅延：{self.delay_minutes if self.delay_minutes != None else "不明"} 分\n' \
         f'次の停車駅は【{self.next_station}駅】\n\n'
-        header = ["発車時刻","停車駅","ホーム番線"]
+        header = ["到着時刻","停車駅","ホーム番線"]
         body = []
         for stop in self.route_stations:
             if stop.time != None:
