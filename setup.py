@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 NAME = "keihan_tracker"
 DESCRIPTION = "京阪電車の列車位置APIラッパー"
 AUTHOR = "dk-butsuri"
-VERSION = "1.1.5"
+VERSION = "1.1.6"
 PYTHON_REQUIRES = ">=3.10"
 URL = "https://github.com/dk-butsuri/keihan_tracker"
 INSTALL_REQUIRES = [
