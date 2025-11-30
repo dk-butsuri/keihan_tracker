@@ -1,5 +1,3 @@
-
-
 # keihan_tracker
 
 京阪電車 リアルタイム列車位置情報API 非公式Pythonライブラリ
@@ -9,180 +7,132 @@
 ---
 
 ## 概要
-京阪電車公式APIのJSONデータをPydanticモデルでバリデートし、それらをKHTrackerクラスから駅・路線・列車・ダイヤ情報を直感的に操作できます。
-深夜帯（0～3時）の時刻も正しく扱える設計です。
+京阪電車公式APIのJSONデータをPydanticモデルでバリデートし、Pythonクラスから駅・路線・列車・ダイヤ情報を直感的に操作できます。
+`httpx` を用いた完全非同期設計で、リアルタイムなアプリケーションに適しています。
 
-- 公式APIのJSONを型安全にパース・バリデート
-- 駅・路線・列車位置・ダイヤ情報をPythonクラスで操作
-- 多言語対応（駅名・路線名、遅延情報）
-- 最小限な依存パッケージ
+- **型安全**: 公式APIのJSONをPydanticでパース・バリデート
+- **非同期**: `asyncio` / `httpx` ベースのノンブロッキングな通信
+- **高度な位置特定**: 路線図上のグリッド座標から「走行中」か「停車中」かを判定
+- **深夜対応**: 0～5時の深夜帯も営業日基準（24時過ぎ）として正しくハンドリング
+- **多言語対応**: 駅名・路線名・遅延情報の多言語データを保持
 
 ## 制限事項・注意点
-- **停車中かどうかの判定はできません。**
-    - 各列車の `next_station` 属性で「停車中または次に停車する駅」が分かりますが、「今まさに停車中かどうか」はAPI仕様上取得が困難です。（`locationCol`・`locationRow`の値から頑張れば割り出せますが、実装がとてもめんどくさいです。）
-    - そのため、列車が駅に停車しているかどうかの判定はできません。
-    - また、列車の到着ホーム、始発駅からの出発時刻も同様にAPI仕様上取得が困難です。
-- API仕様上、運行中のアクティブな列車のみ取得できます。
-
-## クラス構成
-
-### KHTracker
-京阪電車のリアルタイム列車位置情報を管理するメインクラス。
-
-* `stations: dict[int, StationData]` ・・・駅番号→駅データ
-* `trains: dict[int, TrainData]` ・・・列車管理番号→列車データ
-* `fetch_pos()` ・・・列車位置情報をAPIから取得・更新
-* `fetch_dia(download=False)` ・・・ダイヤ情報をAPIから取得・更新
-* `find_trains(type: Optional[TrainType]=None, direction: Optional[Literal["up","down"]]=None, ...)` ・・・条件に合致する列車を検索
-
-#### `find_trains` メソッド
-指定された条件にすべて合致する列車を検索します。
-
-**引数:**
-    - `type`: 列車種別（`TrainType` Enum, 例: `TrainType.LOCAL`）
-    - `direction`: 上り/下り（`"up"` or `"down"`）
-    - `is_special`: 臨時列車かどうか（bool）
-    - `train_number`: 列車番号（例: `"2201"`）
-    - `has_premiumcar`: プレミアムカー付きかどうか（bool）
-    - `destination`: 行先（`StationData`オブジェクト）
-    - `next_station`: 次の停車駅 or 停車中の駅（`StationData`オブジェクト）
-**返り値:**
-    - 条件に合致した `TrainData` のリスト
-
-
-### StationData
-駅情報を表すクラス。
-- `station_number: int` ・・・駅番号（例: KH01 = 淀屋橋）
-- `station_name: MultiLang` ・・・多言語駅名
-- `line: set[str]` ・・・所属路線
-- `transfer: StationConnections` ・・・乗り換え情報
-- `arriving_trains: list[TrainData]` ・・・次に停車する/停車中の列車
-- `trains: list[tuple["TrainData","StopStationData"]]` ・・・停車する/停車した全列車
-- `upcoming_trains: list[tuple["TrainData","StopStationData"]]` ・・・今後停車する/停車中の列車
-
-### TrainData
-列車情報を表すクラス。
-* `wdfBlockNo: int` ・・・列車管理番号
-* `train_number: str` ・・・列車番号
-* `train_type: TrainType` ・・・列車種別（Enum型, 例: `TrainType.LOCAL`）
-* `is_special: bool` ・・・臨時列車かどうか
-* `cars: int` ・・・車両数
-* `direction: "up"|"down"` ・・・上り/下り（京都方面/大阪方面）
-* `destination: StationData` ・・・行先
-* `delay_minutes: None` ・・・遅延分数（未実装）
-* `delay_text: MultiLang|None` ・・・遅延情報（多言語テキスト）
-* `next_station: StationData|None` ・・・次の停車駅 or 通過駅 or 停車中の駅
-* `location_col: int|None` ・・・列車の現在位置インデックス（APIのlocationCol値）
-* `location_row: int|None` ・・・列車の現在位置インデックス（APIのlocationRow値）
-* `route_stations: list[StopStationData]` ・・・経路にある駅
-* `stop_stations: list[StopStationData]` ・・・停車駅のみ
-* `start_station: StationData` ・・・始発駅
-* `get_stop_time(station)` ・・・指定駅に停車する時刻(datetime)を返す
-
-### StopStationData
-停車駅情報を表すクラス。
-- `is_start: bool` ・・・始発駅か
-- `is_stop: bool` ・・・停車駅か
-- `station: StationData` ・・・駅データ
-- `time: datetime|None` ・・・停車時刻（始発駅や通過駅はNone）
-
-### MultiLang
-駅名・路線名の多言語表現。
-- `ja`, `en`, `cn`, `tw`, `kr`: str
-
-
-### StationConnections
-駅で接続する交通手段（電車・地下鉄・モノレール）とその路線名（多言語対応）を表すクラス。
-- `train: MultiLang_Lines|None` ・・・接続する鉄道路線名リスト（多言語）
-- `subway: MultiLang_Lines|None` ・・・接続する地下鉄路線名リスト（多言語）
-- `monorail: MultiLang_Lines|None` ・・・接続するモノレール路線名リスト（多言語）
-
-#### MultiLang_Lines
-複数言語での路線名リストを保持するクラス。
-- `ja: list[str]` ・・・日本語名
-- `en: list[str]` ・・・英語名
-- `cn: list[str]` ・・・中国語（簡体字）名
-- `tw: list[str]` ・・・中国語（繁体字）名
-- `kr: list[str]` ・・・韓国語名
+- **停車判定は推測です**:
+    - APIは「駅ID」ではなく「路線図上の座標(col, row)」しか返しません。本ライブラリは座標から駅と停車状態を逆算するロジック（`position_calculation.py`）を実装していますが、ハードコーディングかつバイブコーディングであり、正確さは保証しません。また、公式サイトのレイアウト変更により判定がズレる可能性があります。
+- **運行中の列車のみ**: API仕様上、現在走行中または準備中のアクティブな列車のみ取得できます。
+- **到着ホーム・発車時刻**: これらはリアルタイムAPIには含まれていないため、取得できません（標準ダイヤ上の時刻は取得可能です）。
 
 ## インストール
-```pip install git+https://github.com/dk-butsuri/keihan_tracker.git```
 
-## 使い方
-```python
-from keihan_tracker import KHTracker
-tracker = KHTracker()
-await tracker.fetch_pos()
-await tracker.fetch_dia()
-
-# KH01（淀屋橋駅）
-station = tracker.stations[1]
-
-# 淀屋橋駅から発車する列車
-for train, stop_data in station.upcoming_trains:
-    if stop_data.time:
-        print(f"{stop_data.time.hour:02}:{stop_data.time.minute:02} [{train.train_type}] {train.destination} 行き")
-    else:
-        # 始発駅、通過駅は時刻がNoneとなる
-        print(f"時刻不明 [{train.train_type}] {train.destination} 行き")
-
-出力例：
-時刻不明 [準急] 出町柳 行き
-時刻不明 [特急] 出町柳 行き
-13:50 [快速急行] 淀屋橋 行き
-
-# 上り特急を検索
-up_lmtexp_trains = tracker.find_trains(type="特急", direction="up")
-for train in up_lmtexp_trains:
-    print(f"  {train.train_type}{train.train_number}号 {train.destination}行き (次の駅: {train.next_station})")
-
-出力例：
-  特急1301号 出町柳行き (次の駅: 北浜)
-  特急1303号 出町柳行き (次の駅: 天満橋)
-
-
-
-# KH03（天満橋）の路線（集合）を取得
-print(tracker.stations[3].line)
-出力：{'京阪本線・鴨東線', '中之島線'}
-
-# 列車位置を更新（数分ごとに実行されるべき）
-tracker.fetch_pos()
-# ダイヤ情報を更新（数時間～1日毎に実行されるべき）
-tracker.fetch_dia(download = True)
+```bash
+pip install git+https://github.com/dk-butsuri/keihan_tracker.git
 ```
 
 ## 依存パッケージ
+- Python 3.9+
 - pydantic
 - httpx
 - tabulate
 
-## 公式APIエンドポイント
+## 使い方
 
-- 駅名乗り換えデータ: https://www.keihan.co.jp/zaisen/transferGuideInfo.json
-- 駅データ: https://www.keihan.co.jp/zaisen/select_station.json
-- 列車走行位置情報: https://www.keihan.co.jp/zaisen-up/trainPositionList.json
-- 標準到着時間のJSON: https://www.keihan.co.jp/zaisen-up/startTimeList.json
+本ライブラリは非同期（async/await）で動作します。
+
+```python
+import asyncio
+from keihan_tracker import KHTracker, TrainType
+
+async def main():
+    tracker = KHTracker()
+
+    # 1. データの更新（初回は必須）
+    # 駅情報等の静的データは初回のみ自動ダウンロードされます
+    await tracker.fetch_pos() 
+    
+    # ダイヤ情報（各駅の到着予定時刻）が必要な場合は実行
+    await tracker.fetch_dia(download=True)
+
+    # --- 例1: 特定の駅の情報を取得 ---
+    # KH01（淀屋橋駅）
+    station = tracker.stations[1]
+    print(f"=== {station.station_name.ja}駅 ===")
+
+    # 今後来る列車を表示
+    print("【次に来る列車】")
+    for train, stop_data in station.upcoming_trains:
+        time_str = stop_data.time.strftime("%H:%M") if stop_data.time else "時刻不明"
+        print(f"  [{time_str}] {train.train_type.value} {train.destination} 行き")
+
+
+    # --- 例2: 条件に合う列車を検索 ---
+    # 上り（京都方面）の特急を検索
+    print("\n【走行中の上り特急】")
+    up_ltd_exp = tracker.find_trains(
+        type=TrainType.LTD_EXP, 
+        direction="up"
+    )
+    
+    for train in up_ltd_exp:
+        status = "停車中" if train.is_stopping else f"走行中 -> {train.next_station}"
+        delay = f"(遅れ: {train.delay_minutes}分)" if train.delay_minutes else ""
+        
+        print(f"  {train.train_number}号: {train.destination}行き {status} {delay}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## クラスリファレンス
+
+### KHTracker
+全体の管理クラス。
+
+*   `stations: dict[int, StationData]`: 駅番号(int)をキーとした駅データの辞書
+*   `trains: dict[int, TrainData]`: 列車管理番号(WDF)をキーとした列車データの辞書
+*   `date: datetime.date`: 現在扱っているデータの営業日（深夜帯は前日扱い）
+
+#### メソッド
+*   `async fetch_pos()`: 列車位置・遅延情報をAPIから取得して更新します。
+*   `async fetch_dia(download: bool)`: 列車の各駅予定時刻（ダイヤ）を取得します。
+*   `find_trains(...)`: 条件に合致する列車リストを返します。
+    *   `type`: `TrainType` (例: `TrainType.EXPRESS`)
+    *   `direction`: `"up"` (京都方面) / `"down"` (大阪方面)
+    *   `is_special`: 臨時列車かどうか
+    *   `min_delay` / `max_delay`: 遅延分数によるフィルタ
+    *   他 (`train_number`, `destination`, `has_premiumcar` 等)
+
+### TrainData
+個々の列車を表すクラス。
+
+*   `train_number: str`: 列車番号
+*   `train_type: TrainType`: 種別 (Enum)
+*   `destination: StationData`: 行先駅
+*   `direction`: `"up"` | `"down"`
+*   `is_stopping: bool`: **[算出プロパティ]** 現在駅に停車中かどうか
+*   `next_station: StationData | None`: 次に停車する駅（停車中の場合はその駅）
+*   `delay_minutes: int`: 遅延分数（正常時は0）
+*   `cars: int`: 両数
+*   `has_premiumcar: bool`: プレミアムカー有無
+*   `stop_stations: list[StopStationData]`: 停車駅リスト
+*   `get_stop_time(station) -> datetime`: 指定駅の到着予定時刻を取得
+
+### StationData
+駅を表すクラス。
+
+*   `station_number: int`: 駅番号 (例: 1)
+*   `station_name: MultiLang`: 駅名
+*   `line: set[str]`: 所属路線名
+*   `transfer: StationConnections`: 乗り換え路線情報
+*   `arriving_trains`: この駅に向かっている（次がこの駅である）列車のリスト
+*   `upcoming_trains`: この駅に今後停車するすべての列車のリスト
+
+## 公式APIエンドポイント
+本ライブラリは以下の公開JSONを利用しています。
+- 駅・路線データ: `select_station.json`, `transferGuideInfo.json`
+- リアルタイム位置: `trainPositionList.json`
+- ダイヤ・時刻: `startTimeList.json`
 
 ## ライセンス
 MIT License
 
 Copyright © 2025 dk-butsuri
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.

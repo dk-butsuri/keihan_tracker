@@ -123,6 +123,7 @@ def calc_position(col: int, row: int) -> tuple[LineLiteral, int, Optional[int]]:
 
     return (line, 0, None)
 
-col,row=map(int,input().split())
-r = calc_position(col,row)
-print(r)
+if __name__ == "__main__":
+    col,row=map(int,input().split())
+    r = calc_position(col,row)
+    print(r)
