@@ -10,7 +10,7 @@ from .schemes import (TransferGuideInfo,
                       TrainType,
                       LineLiteral,
                       )
-from position_calculation import calc_position
+from .position_calculation import calc_position
 from pydantic import BaseModel
 from typing import Optional, Literal
 from httpx import AsyncClient
