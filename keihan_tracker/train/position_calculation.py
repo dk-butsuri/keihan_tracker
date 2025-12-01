@@ -1,7 +1,7 @@
 # GEMINI VIBE CODING
 
 from typing import Optional
-from schemes import LineLiteral
+from .schemes import LineLiteral
 
 def calc_position(col: int, row: int) -> tuple[LineLiteral, int, Optional[int]]:
     
