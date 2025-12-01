@@ -173,7 +173,7 @@ class TrainData(BaseModel):
     def __str__(self) -> str:
         text = f'[{"上り線" if self.direction == "up" else "下り線"}] {"臨時" if self.is_special else ""}{self.train_type.value}{self.train_number}号: {self.destination or "不明"}行き {self.train_formation}系/{self.cars}両編成\n'\
         f'{"プレミアムカー付き /" if self.has_premiumcar else ""}遅延：{self.delay_minutes if self.delay_minutes != None else "不明"} 分\n' \
-        f'次の停車駅は【{self.next_station}駅】\n\n'
+        f'次の停車駅は【{self.next_station}駅】\n\n' if not self.is_stopping else f"【{self.next_station}駅】に停車中"
         header = ["到着時刻","停車駅","ホーム番線"]
         body = []
         for stop in self.route_stations:
@@ -222,7 +222,8 @@ class KHTracker:
             destination:    Optional[StationData] = None,
             next_station:   Optional[StationData] = None,
             min_delay:      Optional[int] = None,
-            max_delay:      Optional[int] = None
+            max_delay:      Optional[int] = None,
+            is_stopping:    Optional[bool] = None
             ) -> list[TrainData]:
         """
         条件に合致する列車を検索してリストで返す。
@@ -255,6 +256,9 @@ class KHTracker:
                 continue
             if max_delay and (train.delay_minutes or 0) >= max_delay:
                 continue
+            if is_stopping != None:
+                if train.is_stopping != is_stopping:
+                    continue
             
             trains.append(train)
         return trains
@@ -373,10 +377,12 @@ class KHTracker:
                 # self.trains[wdf] = TrainData(wdfBlockNo=wdf)
                 # もし存在しなかったらスキップ
                 continue
+
             self.trains[wdf].train_formation = int(train.trainCar)
             self.trains[wdf].has_premiumcar = bool(train.premiumCar)
             # ダイヤ登録
             self.trains[wdf].route_stations = []
+            
             for stop_station in train.diaStationInfoObjects:
                 # 3桁の上２桁が駅番号
                 if len(stop_station.stationNumber) != 3:
