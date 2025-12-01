@@ -155,8 +155,8 @@ class TrainData(BaseModel):
         """列車が停車中かどうか判定します。"""
         line, st1, st2 = calc_position(self.location_col, self.location_row)
         if not st2:
-            if self.master.stations[st1] != self.next_station:
-                raise Exception("next_station属性とcol/rowの分析結果が一致しません。")
+            if self.next_station and self.master.stations[st1] != self.next_station:
+                raise Exception(f"next_station属性({self.next_station})とcol {self.location_col}/ row {self.location_row}の分析結果（{st1}）が一致しません。")
             return True
         else:
             return False
