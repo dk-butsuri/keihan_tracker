@@ -20,7 +20,7 @@
 - **停車判定は推測です**:
     - APIは「駅ID」ではなく「路線図上の座標(col, row)」しか返しません。本ライブラリは座標から駅と停車状態を逆算するロジック（`position_calculation.py`）を実装していますが、ハードコーディングかつバイブコーディングであり、正確さは保証しません。また、公式サイトのレイアウト変更により判定がズレる可能性があります。
 - **運行中の列車のみ**: API仕様上、現在走行中または準備中のアクティブな列車のみ取得できます。
-- **到着ホーム・発車時刻**: これらはリアルタイムAPIには含まれていないため、取得できません（標準ダイヤ上の時刻は取得可能です）。
+- **到着ホーム・発車時刻**: これらはリアルタイムAPIには含まれていないため、取得できません。（到着時刻は取得可能です。また、一部の駅においてはCol/Rowから計算可能です。）
 
 ## インストール
 
@@ -44,10 +44,6 @@ from keihan_tracker import KHTracker, TrainType
 
 async def main():
     tracker = KHTracker()
-
-    # 1. データの更新（初回は必須）
-    # 駅情報等の静的データは初回のみ自動ダウンロードされます
-    await tracker.fetch_pos() 
     
     # ダイヤ情報（各駅の到着予定時刻）が必要な場合は実行
     await tracker.fetch_dia(download=True)
@@ -109,7 +105,8 @@ if __name__ == "__main__":
 *   `destination: StationData`: 行先駅
 *   `direction`: `"up"` | `"down"`
 *   `is_stopping: bool`: **[算出プロパティ]** 現在駅に停車中かどうか
-*   `next_station: StationData | None`: 次に停車する駅（停車中の場合はその駅）
+*   `next_stop_station: StationData | None`: 次に停車する駅（停車中の場合はその駅）
+*   `next_station: StationData | None`: 次に停車・通過する駅（停車中の場合はその駅）
 *   `delay_minutes: int`: 遅延分数（正常時は0）
 *   `cars: int`: 両数
 *   `has_premiumcar: bool`: プレミアムカー有無

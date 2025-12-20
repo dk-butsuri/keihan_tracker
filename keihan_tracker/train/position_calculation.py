@@ -4,7 +4,7 @@ from typing import Optional
 from .schemes import LineLiteral
 
 def calc_position(col: int, row: int) -> tuple[LineLiteral, int, Optional[int]]:
-    
+    """座標から、停車中の駅番号、もしくは2駅の駅番号を返します。"""
     line: LineLiteral
     
     # --- 1. 路線判定 ---
