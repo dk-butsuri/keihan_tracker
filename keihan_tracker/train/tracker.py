@@ -285,7 +285,7 @@ class KHTracker:
             is_stopping:    Optional[bool] = None
             ) -> list[TrainData]:
         """
-        条件に合致する列車を検索してリストで返す。
+        条件に合致する列車を検索してリストで返します。
         - type: 列車種別（例: "普通"）
         - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）
         - is_special: 臨時列車かどうか
@@ -311,9 +311,9 @@ class KHTracker:
                 continue
             if next_stop_station and train.next_stop_station != next_stop_station:
                 continue
-            if min_delay and (train.delay_minutes or 0) <= min_delay:
+            if min_delay and train.delay_minutes <= min_delay:
                 continue
-            if max_delay and (train.delay_minutes or 0) >= max_delay:
+            if max_delay and train.delay_minutes >= max_delay:
                 continue
             if is_stopping != None:
                 if train.is_stopping != is_stopping:
@@ -325,7 +325,7 @@ class KHTracker:
 
     #動的データを更新
     async def fetch_pos(self):
-        "列車走行位置を更新します。数十秒～数分に一回が適切でしょう。"
+        "列車走行位置を更新します。30秒～数分に一回が適切でしょう。"
         #不変データをダウンロード
         if not self.select_station:
             res = await self.web.get("https://www.keihan.co.jp/zaisen/select_station.json")
@@ -425,7 +425,7 @@ class KHTracker:
             await self.regist_dia(True)
 
     async def regist_dia(self, download:bool):
-        "startTimeList.jsonを更新する"
+        "ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
         if download or self.starttime_list == None:
             res = await self.web.get("https://www.keihan.co.jp/zaisen-up/startTimeList.json")
             res.raise_for_status()
@@ -492,7 +492,7 @@ class KHTracker:
         return self
 
     async def fetch_filelist(self):
-        """FileList.xmlを取得する。"""
+        """【未実装】FileList.xmlを取得する。"""
         res = await self.web.get("https://www.keihan.co.jp/tinfo/05-flist/FileList.xml")
         res.raise_for_status()
         root = ET.fromstring(res.text)
@@ -518,14 +518,14 @@ class KHTracker:
         self.file_list = filelist
 
     @property
-    def max_delay_minutes(self) -> int:
-        """現在の最大遅延分数"""
-        return max(self.trains.values(), key=lambda x:x.delay_minutes if x.delay_minutes else 0).delay_minutes or 0
-
-    @property
     def max_delay_train(self) -> TrainData:
         """現在もっとも遅延している列車"""
-        return max(self.trains.values(), key=lambda x:x.delay_minutes if x.delay_minutes else 0)
+        return max(self.trains.values(), key=lambda x:x.delay_minutes)
+
+    @property
+    def max_delay_minutes(self) -> int:
+        """現在の最大遅延分数"""
+        return self.max_delay_train.delay_minutes
 
 if __name__ == "__main__":
     tracker = KHTracker()

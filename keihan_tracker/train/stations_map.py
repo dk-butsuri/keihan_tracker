@@ -1,5 +1,5 @@
-#路線の本面別の駅リスト
-
+# ./tracker.py next_stop_station関数の探索用
+# 路線の方面別の駅リスト
 KYOBASHI_TO_DEMACHIYANAGI=[i for i in range(4,42+1)]
 
 UJI_UP = [77,76,75,74,73,72,71,28]
