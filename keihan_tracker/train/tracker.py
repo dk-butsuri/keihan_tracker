@@ -417,7 +417,7 @@ class KHTracker:
         
         #ダイア情報を登録
         if self.starttime_list:
-            if (self.starttime_list.fileCreatedTime-datetime.timedelta(hours=5)).date() != self.date:
+            if (datetime.datetime.now()-self.starttime_list.fileCreatedTime) > datetime.timedelta(hours=1):
                 await self.regist_dia(True)
             else:
                 await self.regist_dia(False)
