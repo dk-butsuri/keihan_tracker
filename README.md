@@ -42,7 +42,7 @@ pip install git+https://github.com/dk-butsuri/keihan_tracker.git
 ```
 
 ## 依存パッケージ
-- Python 3.9+
+- Python 3.10+
 - pydantic
 - httpx
 - tabulate
