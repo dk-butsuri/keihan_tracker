@@ -124,12 +124,12 @@ class TrainData(BaseModel):
     train_number:   str             # 列車番号（1051号など）
     train_type:     TrainType
     is_special:     bool            # 臨時か
-    has_premiumcar: Optional[bool] = None           
+    has_premiumcar: Optional[bool] = None
     lastpass_station:   Optional[StationData] = None
     cars :          int             # 車両数
     destination:    StationData     # 行先駅
     delay_minutes:  int             # 遅延時間
-    delay_text:     Optional[MultiLang] = None       # 遅延時間（テキスト）
+    delay_text:     MultiLang       # 遅延時間（テキスト）
     direction:      Literal["up","down"]    #方向（up:京都方面、down:大阪方面）
     route_stations: list[StopStationData] = []      # 経路にある駅リスト
 
@@ -394,20 +394,33 @@ class KHTracker:
                         direction = "up" if trainlist.trainDirection == 0 else "down",
                         location_col = trainlist.locationCol,
                         location_row = trainlist.locationRow,
+                        delay_text = MultiLang(
+                            ja = train.delayMinutes,
+                            en = train.delayMinutesEn,
+                            cn = train.delayMinutesZhCn,
+                            tw = train.delayMinutesZhTw,
+                            kr = train.delayMinutesKo
+                        ),
                         delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
                         )
-                
-                # 次に停車する駅
+                else:
+                    # 可変の情報を更新
+                    self.trains[wdf].location_col = trainlist.locationCol
+                    self.trains[wdf].location_row = trainlist.locationRow
+                    self.trains[wdf].delay_text = MultiLang(
+                        ja = train.delayMinutes,
+                        en = train.delayMinutesEn,
+                        cn = train.delayMinutesZhCn,
+                        tw = train.delayMinutesZhTw,
+                        kr = train.delayMinutesKo
+                    )
+                    self.trains[wdf].delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
+
+                # lastPassStationを更新
                 if train.lastPassStation != 99 and train.lastPassStation != 0:
                     self.trains[wdf].lastpass_station = self.stations[train.lastPassStation]
-
-                self.trains[wdf].delay_text = MultiLang(
-                    ja = train.delayMinutes,
-                    en = train.delayMinutesEn,
-                    cn = train.delayMinutesZhCn,
-                    tw = train.delayMinutesZhTw,
-                    kr = train.delayMinutesKo
-                )
+                else:
+                    self.trains[wdf].lastpass_station = None
 
         # 日付更新
         if 0 <= self.train_position_list.fileCreatedTime.hour <= 5:
