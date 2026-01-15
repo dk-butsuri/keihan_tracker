@@ -229,7 +229,8 @@ class TrainData(BaseModel):
 
     # 整形して文字列化
     def __str__(self) -> str:
-        text = f'[{"上り線" if self.direction == "up" else "下り線"}] {"臨時" if self.is_special else ""}{self.train_type.value}{self.train_number}号: {self.destination or "不明"}行き {self.train_formation}系/{self.cars}両編成\n'\
+        text = f'[{"上り線" if self.direction == "up" else "下り線"}] {"臨時" if self.is_special else ""}{self.train_type.value}{self.train_number}号: {self.destination or "不明"}行き {self.train_formation}系/{self.cars}両編成'
+        text += f'(col/row: {self.location_col}/{self.location_row})\n'\
         f'{"プレミアムカー付き /" if self.has_premiumcar else ""}遅延：{self.delay_minutes if self.delay_minutes != None else "不明"} 分\n'
         text += f'次の停車駅は【{self.next_stop_station}駅】\n\n' if not self.is_stopping else f"【{self.next_station}駅】に停車中\n\n"
 
