@@ -44,7 +44,7 @@ class TrainType(str, Enum):
     LOCAL = "普通"
     SEMI_EXP = "区間急行"
     SUB_EXP = "準急"
-    COMMUTER_SEMI_EXP = "通勤準急"
+    COMMUTER_SUB_EXP = "通勤準急"
     EXPRESS = "急行"
     COMMUTER_EXP = "通勤急行"
     MIDNIGHT_EXP = "深夜急行"
