@@ -13,6 +13,7 @@ from .schemes import (TransferGuideInfo,
 from . import stations_map
 from .position_calculation import calc_position
 from pydantic import BaseModel
+import warnings
 from typing import Optional, Literal, Sequence
 from httpx import AsyncClient
 import json
@@ -143,85 +144,99 @@ class TrainData(BaseModel):
     @property
     def train_type(self) -> TrainType:
         """
-        【実験的機能】停車駅リストに基づいて列車種別を推定する
+        停車駅リストに基づいて列車種別を推定する
         """
-        def find_station(name: str):
-            for s in self.master.stations.values(): # 辞書の値から探す
-                if str(s) == name: return s
-            return None
-
         stop_stations_list = [stop.station for stop in self.stop_stations]
 
-        # 判定に必要な駅
-        st_kozenji = find_station("光善寺")
-        st_kyobashi = find_station("京橋")
-        st_noe = find_station("野江")
-        st_kadomashi = find_station("門真市")
-        st_moriguchishi = find_station("守口市")
-        st_hirakatashi = find_station("枚方市")
-        st_hirakatakoen = find_station("枚方公園")
-        st_neyagawashi = find_station("寝屋川市")
+        try:
+            st_kyobashi = self.master.stations[4]      # KH04 京橋
+            st_noe = self.master.stations[5]           # KH05 野江
+            st_moriguchishi = self.master.stations[11] # KH11 守口市
+            st_kadomashi = self.master.stations[13]    # KH13 門真市
+            st_kayashima = self.master.stations[16]    # KH16 萱島
+            st_neyagawashi = self.master.stations[17]  # KH17 寝屋川市
+            st_hirakatakoen = self.master.stations[20] # KH20 枚方公園
+            st_hirakatashi = self.master.stations[21]  # KH21 枚方市
+            
+            # 京都側の判定用
+            st_fushimiinari = self.master.stations[34] # KH34 伏見稲荷
+            st_tobakaido = self.master.stations[35]    # KH35 鳥羽街道
+            st_jingu_marutamachi = self.master.stations[41] # KH41 神宮丸太町
 
-        # 対象外路線
-        if self.line not in ["京阪本線・鴨東線", "中之島線"]:
+        except KeyError:
             return TrainType.LOCAL
 
-        if st_kozenji and (st_kozenji in stop_stations_list):
-            if st_kyobashi and (st_kyobashi not in stop_stations_list):
+        # 対象外路線
+        if getattr(self, "line", "") not in ["京阪本線・鴨東線", "中之島線"]:
+            return TrainType.LOCAL
+
+        # 1. 【普通】 
+        # 大阪側: 野江(KH05)に停車するなら普通
+        if st_noe in stop_stations_list:
+            return TrainType.LOCAL
+        
+        # --- 京橋(KH04)を通らない列車の判定 ---
+        if st_kyobashi not in stop_stations_list:
+            # 鳥羽街道(KH35)に停車するなら確実に普通
+            if st_tobakaido in stop_stations_list:
                 return TrainType.LOCAL
             
-            # --- ここから下は京橋まで行く列車 ---
-            # 野江にとまるなら「普通」
-            if st_noe and (st_noe in stop_stations_list):
-                return TrainType.LOCAL
+            # 鳥羽街道に停車しない場合
+            # 「鳥羽街道(KH35)をまたぐ運行かどうか」で判定を分岐
             
-            # 野江を通過するなら「準急」か「区間急行」
-            # 違いは「門真市」：区急はとまる、準急は通過
-            if st_kadomashi and (st_kadomashi in stop_stations_list):
-                return TrainType.SEMI_EXP # 区間急行
-            else:
-                return TrainType.SUB_EXP  # 準急
-
-        # 2. 光善寺を通過するグループ (急行・特急系)
-        else:
-            # 「守口市」を通過するか？
-            is_pass_moriguchi = False
-            if st_moriguchishi and (st_moriguchishi not in stop_stations_list):
-                is_pass_moriguchi = True
-
-            if is_pass_moriguchi:
-                # --- 守口通過グループ ---
-
-                # 【快速特急 洛楽】 枚方市すら通過
-                if st_hirakatashi and (st_hirakatashi not in stop_stations_list):
-                    return TrainType.RAPID_LTD_EXP
-                
-                # 【特急 / ライナー】 寝屋川市通過
-                if st_neyagawashi and (st_neyagawashi not in stop_stations_list):
-                     if "ライナー" in getattr(self, 'name', ''): # name属性があるか不明なので安全策
-                         return TrainType.LINER
-                     return TrainType.LTD_EXP
-                
-                # --- 寝屋川市 停車 ---
-
-                # 【通勤快急】 枚方公園 通過
-                if st_hirakatakoen and (st_hirakatakoen not in stop_stations_list):
-                    return TrainType.COMMUTER_RAPID_EXP
-                
-                # 【通勤準急】 枚方公園 停車
-                else:
-                    return TrainType.COMMUTER_SUB_EXP
-
-            else:
-                # --- 守口停車グループ ---
-
-                # 【快速急行】 枚方公園 通過
-                if st_hirakatakoen and (st_hirakatakoen not in stop_stations_list):
-                    return TrainType.RAPID_EXP
-                
-                # 【急行】 枚方公園 停車 (かつ光善寺通過)
-                else:
+            # 始発駅と終着駅の駅番号を取得
+            start_num = stop_stations_list[0].station_number
+            last_num = stop_stations_list[-1].station_number
+            min_num, max_num = sorted((start_num, last_num))
+            
+            # 運行区間に鳥羽街道(35)が含まれているか？
+            # (区間がまたいでいる = min < 35 < max)
+            is_cross_tobakaido = min_num < 35 < max_num
+            
+            if is_cross_tobakaido:
+                # 鳥羽街道を通過する列車（例：淀行き急行）
+                if st_fushimiinari in stop_stations_list:
                     return TrainType.EXPRESS
+                
+                if "ライナー" in getattr(self, 'name', ''):
+                    return TrainType.LINER
+                return TrainType.LTD_EXP
+            
+            else:
+                # 鳥羽街道まで行かない短距離列車（例：出町柳～三条）
+                # 神宮丸太町(KH41)に停車するなら普通
+                if st_jingu_marutamachi in stop_stations_list:
+                    return TrainType.LOCAL
+                
+                # 万が一、神宮丸太町を通過する短距離列車があれば特急扱い
+                return TrainType.LTD_EXP
+
+
+        # --- 以下、京橋(KH04)を通る列車の判定 (既存ロジック) ---
+        if st_kadomashi in stop_stations_list:
+             return TrainType.SEMI_EXP
+
+        if st_kayashima in stop_stations_list:
+            if st_moriguchishi in stop_stations_list:
+                return TrainType.SUB_EXP          # 準急
+            else:
+                return TrainType.COMMUTER_SUB_EXP # 通勤準急
+
+        if st_moriguchishi in stop_stations_list:
+            if st_hirakatakoen in stop_stations_list:
+                return TrainType.EXPRESS     # 急行
+            else:
+                return TrainType.RAPID_EXP   # 快速急行
+        else:
+            if st_hirakatashi not in stop_stations_list:
+                return TrainType.RAPID_LTD_EXP # 快速特急 洛楽
+
+            if st_neyagawashi in stop_stations_list:
+                return TrainType.COMMUTER_RAPID_EXP # 通勤快急
+            else:
+                if "ライナー" in getattr(self, 'name', ''):
+                    return TrainType.LINER
+                return TrainType.LTD_EXP # 特急
 
     # 始発駅（is_startがTrueの停車駅のうち1番目を返す）
     @property
@@ -292,6 +307,9 @@ class TrainData(BaseModel):
     # masterの型を許可する
     model_config = {"arbitrary_types_allowed": True}
 
+
+# ActiveTrainDataによる属性上書きの警告を無効化
+warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 class ActiveTrainData(TrainData):
     """
     現在アクティブな列車情報を表すモデル。
@@ -453,6 +471,7 @@ class KHTracker:
 
     def find_trains(
             self, 
+            status: Optional[Literal['active', 'scheduled', 'completed']] = None,
             train_type:           Optional[TrainType] = None, 
             direction:      Optional[Literal["up","down"]] = None, 
             is_special:     Optional[bool] = None, 
@@ -474,32 +493,34 @@ class KHTracker:
         - destination: 行き先駅
         - next_stop_station: 次の停車駅 or 停車中の駅
         """
-        trains: list[ActiveTrainData] = []
+        trains: list[TrainData|ActiveTrainData] = []
         for train in self.trains.values():
-            if type(train) != ActiveTrainData:
-                continue
             # 条件に合致するかチェック
-            if train_type and train.train_type != type:
+            if status and status != train.status:
                 continue
-            if direction and train.direction != direction:
-                continue
-            if is_special is not None and train.is_special != is_special:
-                continue
-            if train_number and train.train_number != train_number:
+            if train_type and train.train_type != train_type:
                 continue
             if has_premiumcar is not None and train.has_premiumcar != has_premiumcar:
                 continue
             if destination and train.destination != destination:
                 continue
-            if next_stop_station and train.next_stop_station != next_stop_station:
-                continue
             if min_delay and train.delay_minutes <= min_delay:
                 continue
             if max_delay and train.delay_minutes >= max_delay:
                 continue
-            if is_stopping != None:
-                if train.is_stopping != is_stopping:
+
+            if isinstance(train, ActiveTrainData):
+                if next_stop_station and train.next_stop_station != next_stop_station:
                     continue
+                if direction and train.direction != direction:
+                    continue
+                if is_special is not None and train.is_special != is_special:
+                    continue
+                if train_number and train.train_number != train_number:
+                    continue
+                if is_stopping != None:
+                    if train.is_stopping != is_stopping:
+                        continue
             
             trains.append(train)
         return trains
