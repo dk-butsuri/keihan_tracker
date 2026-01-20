@@ -55,7 +55,7 @@ class StationData(BaseModel):
                 if stop.station == self and stop.is_stop:
                     trains.append((train,stop))
 
-        trains.sort(key = lambda t:t[1].time or datetime.datetime.min)
+        trains.sort(key = lambda t:t[1].time or datetime.datetime.min.replace(tzinfo=JST))
         return trains
     
     @property
@@ -96,7 +96,7 @@ class StationData(BaseModel):
                 if self in [s.station for s in train.stop_stations] and train.status == "scheduled":
                     trains.append((train,stop))
 
-        trains.sort(key=lambda x:x[1].time or datetime.datetime.min)
+        trains.sort(key=lambda x:x[1].time or datetime.datetime.min.replace(tzinfo=JST))
         return trains
 
     def __str__(self):
