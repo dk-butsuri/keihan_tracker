@@ -367,7 +367,7 @@ class ActiveTrainData(TrainData):
         return self.active_train_type
 
     @property
-    def destionation(self):
+    def destination(self):
         return self.active_destination
 
     @property
