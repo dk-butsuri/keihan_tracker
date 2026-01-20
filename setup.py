@@ -10,7 +10,8 @@ INSTALL_REQUIRES = [
     "pydantic",
     "httpx",
     "tabulate",
-    "beautifulsoup4"
+    "beautifulsoup4",
+    "tzdata"
     ]
 LICENSE = "MIT License"
 
