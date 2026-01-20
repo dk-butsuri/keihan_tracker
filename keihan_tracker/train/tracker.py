@@ -21,6 +21,9 @@ import xml.etree.ElementTree as ET
 from tabulate import tabulate
 import datetime
 import re
+from zoneinfo import ZoneInfo
+
+JST = ZoneInfo("Asia/Tokyo")
 
 class StationData(BaseModel):
     """
@@ -61,7 +64,7 @@ class StationData(BaseModel):
         この駅に 今後停車する or 停車中 のすべての列車を返す。
         列車のnext_stop_stationの停車時刻とこの駅に停車する時刻を比較する。
         """
-        trains:list[tuple[TrainData|ActiveTrainData, StopStationData]] = []
+        trains:list[tuple[(TrainData|ActiveTrainData), StopStationData]] = []
 
         # 全ての列車から
         for train, stop in self.trains:
@@ -92,6 +95,8 @@ class StationData(BaseModel):
             else:
                 if self in [s.station for s in train.stop_stations] and train.status == "scheduled":
                     trains.append((train,stop))
+
+        trains.sort(key=lambda x:x[1].time or datetime.datetime.min)
         return trains
 
     def __str__(self):
@@ -213,8 +218,8 @@ class TrainData(BaseModel):
             # 「鳥羽街道(KH35)をまたぐ運行かどうか」で判定を分岐
             
             # 始発駅と終着駅の駅番号を取得
-            start_num = stop_stations_list[0].station_number
-            last_num = stop_stations_list[-1].station_number
+            start_num = self.start_station.station_number
+            last_num = self.destination.station_number
             min_num, max_num = sorted((start_num, last_num))
             
             # 運行区間に鳥羽街道(35)が含まれているか？
@@ -293,7 +298,7 @@ class TrainData(BaseModel):
         # もし終着駅の予定時刻を過ぎていたらcompleted
         stop_time = self.get_stop_time(self.destination)
         if stop_time:
-            if stop_time < datetime.datetime.now():
+            if stop_time < datetime.datetime.now(JST):
                 return "completed"
         return "scheduled"
     
@@ -306,7 +311,7 @@ class TrainData(BaseModel):
     def stop_stations(self) -> list[StopStationData]:
         """停車する駅のリストを返します。"""
         stops = [station for station in self.route_stations if station.is_stop == True]
-        stops.sort(key = lambda x:x.time or datetime.datetime.min)
+        stops.sort(key = lambda x:x.time or datetime.datetime.min.replace(tzinfo=JST))
         return stops
     
     def get_stop_time(self, station:StationData) -> Optional[datetime.datetime]:
@@ -480,7 +485,7 @@ class KHTracker:
         self.starttime_list: Optional[startTimeList] = None          # 列車ごとの駅到着時刻データ
         self.train_position_list: Optional[trainPositionList] = None # 列車の種別・位置・遅延情報データ
         self.file_list: Optional[FileList] = None
-        self.date: datetime.date = datetime.datetime.now().date()    # 日度（始発から終電までを1日とする日付）
+        self.date: datetime.date = datetime.datetime.now(JST).date()    # 日度（始発から終電までを1日とする日付）
         self.web = AsyncClient()
 
         # wdfBlockNo:TrainData
@@ -662,7 +667,7 @@ class KHTracker:
         
         #ダイア情報を登録
         if self.starttime_list:
-            if (datetime.datetime.now()-self.starttime_list.fileCreatedTime) > datetime.timedelta(hours=1):
+            if (datetime.datetime.now(JST)-self.starttime_list.fileCreatedTime) > datetime.timedelta(hours=1):
                 await self.regist_dia(True)
             else:
                 await self.regist_dia(False)
@@ -724,7 +729,7 @@ class KHTracker:
                 else:
                     is_stop:bool = True
                     time = datetime.datetime.combine(self.date, datetime.time.min) + datetime.timedelta(hours=ltime[0],minutes=ltime[1])
-
+                    time = time.replace(tzinfo=JST)
                 self.trains[wdf].route_stations.append(
                         StopStationData(
                             is_start = False,
@@ -748,7 +753,7 @@ class KHTracker:
         # 時刻設定
         t = root.findtext("time")
         if t:
-            time = datetime.datetime.strptime(t,"%Y%m%d%H%M%S")
+            time = datetime.datetime.strptime(t,"%Y%m%d%H%M%S").replace(tzinfo=JST)
         else:
             return
         traininfo = root.findtext("traininfo") or ""

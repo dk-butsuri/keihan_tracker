@@ -37,7 +37,9 @@ from pydantic import BaseModel, RootModel, Field, model_validator, field_validat
 from typing import Optional, Literal
 from enum import Enum
 import datetime
+from zoneinfo import ZoneInfo
 
+JST = ZoneInfo("Asia/Tokyo")
 
 # 列車種別をEnumで定義
 class TrainType(str, Enum):
@@ -174,7 +176,7 @@ class trainPositionList(BaseModel):
 
     @field_validator("fileCreatedTime", mode="before")
     def validate_time(cls,value) -> datetime.datetime:
-        return datetime.datetime.strptime(value,"%Y%m%d%H%M%S")
+        return datetime.datetime.strptime(value,"%Y%m%d%H%M%S").replace(tzinfo=JST)
 
 # 1.
 class diaStationInfoObject(BaseModel):
@@ -201,7 +203,7 @@ class startTimeList(BaseModel):
 
     @field_validator("fileCreatedTime", mode="before")
     def validate_time(cls,value) -> datetime.datetime:
-        return datetime.datetime.strptime(value,"%Y%m%d%H%M%S")
+        return datetime.datetime.strptime(value,"%Y%m%d%H%M%S").replace(tzinfo=JST)
 
 # FileList.xmlのモデル
 class FileList(BaseModel):
