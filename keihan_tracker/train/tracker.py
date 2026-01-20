@@ -12,7 +12,7 @@ from .schemes import (TransferGuideInfo,
                       )
 from . import stations_map
 from .position_calculation import calc_position
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import warnings
 from typing import Optional, Literal, Sequence
 from httpx import AsyncClient
@@ -346,21 +346,33 @@ class ActiveTrainData(TrainData):
     - 列車番号、種別、編成、行先、停車駅リストなどを保持
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
     """
-    train_formation:Optional[int] = None       # 編成番号（）
+    train_formation:Optional[int] = None       # 編成番号
     train_number:   str             # 列車番号（1051号など）
-    train_type:     TrainType
+    active_train_type:  TrainType            = Field(alias="train_type")
+    active_direction:   Literal["up","down"] = Field(alias="direction")     # 方向（up:京都方面、down:大阪方面）
+    active_destination: StationData          = Field(alias="destination")   # 行先駅
     is_special:     bool            # 臨時か
     has_premiumcar: Optional[bool] = None
     lastpass_station:   Optional[StationData] = None
     cars :          int             # 車両数
-    destination:    StationData     # 行先駅
     delay_text:     MultiLang       # 遅延時間（テキスト）
-    direction:      Literal["up","down"]    #方向（up:京都方面、down:大阪方面）
     route_stations: list[StopStationData] = []      # 経路にある駅リスト
 
     # サイト上で列車位置を表示するときのグリッド座標
     location_col: int
     location_row: int
+    
+    @property
+    def train_type(self):
+        return self.active_train_type
+
+    @property
+    def destionation(self):
+        return self.active_destination
+
+    @property
+    def direction(self) -> Literal["up","down"]:
+        return self.active_direction
 
     @property
     def is_stopping(self) -> bool:
