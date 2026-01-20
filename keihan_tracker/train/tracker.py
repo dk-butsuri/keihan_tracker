@@ -133,6 +133,7 @@ class TrainData(BaseModel):
     train_formation: Optional[int]
     route_stations: list[StopStationData] = []      # 経路にある駅リスト
     is_completed:bool = False # Falseは必ずしも運行前、運行中であるとは限らない
+    delay_minutes: int = 0
 
     @property
     def line(self) -> LineLiteral:
@@ -301,10 +302,6 @@ class TrainData(BaseModel):
             if stop_time < datetime.datetime.now(JST):
                 return "completed"
         return "scheduled"
-    
-    @property
-    def delay_minutes(self) -> int:
-        return 0
 
     # 停車駅リスト
     @property
@@ -349,8 +346,6 @@ class ActiveTrainData(TrainData):
     - 列車番号、種別、編成、行先、停車駅リストなどを保持
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
     """
-    master:     "KHTracker"
-    wdfBlockNo: int                 # 列車管理番号
     train_formation:Optional[int] = None       # 編成番号（）
     train_number:   str             # 列車番号（1051号など）
     train_type:     TrainType
@@ -358,7 +353,6 @@ class ActiveTrainData(TrainData):
     has_premiumcar: Optional[bool] = None
     lastpass_station:   Optional[StationData] = None
     cars :          int             # 車両数
-    delay_minutes:  int             # 遅延時間
     destination:    StationData     # 行先駅
     delay_text:     MultiLang       # 遅延時間（テキスト）
     direction:      Literal["up","down"]    #方向（up:京都方面、down:大阪方面）
@@ -772,7 +766,7 @@ class KHTracker:
 
     @property
     def max_delay_train(self) -> TrainData:
-        """現在もっとも遅延している列車"""
+        """現在もっとも遅延している運行中の列車"""
         return max(self.trains.values(), key=lambda x:x.delay_minutes if isinstance(x,ActiveTrainData) else 0)
 
     @property
