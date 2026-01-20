@@ -140,6 +140,34 @@ class TrainData(BaseModel):
             return "宇治線"
         else:
             return "京阪本線・鴨東線"
+    
+    @property
+    def direction(self) -> Literal["up","down"]:
+        """始発・終着駅から方向を推定する"""
+        if self.line == "交野線":
+            # 私市行きなら下り
+            if self.destination == self.master.stations[67]:
+                return "down"
+            else:
+                return "up"
+        elif self.line == "宇治線":
+            # 宇治行きなら下り
+            if self.destination == self.master.stations[77]:
+                return "down"
+            else:
+                return "up"
+        elif self.line == "中之島線":
+            # 中ノ島行きなら下り
+            if self.destination == self.master.stations[54]:
+                return "down"
+            else:
+                return "up"
+        else:
+            # 目的地の方が番号が若いなら（大阪方面行）
+            if self.destination.station_number < self.start_station.station_number:
+                return "down"
+            else:
+                return "up"
 
     @property
     def train_type(self) -> TrainType:
