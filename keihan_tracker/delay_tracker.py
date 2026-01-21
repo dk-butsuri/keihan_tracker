@@ -15,7 +15,10 @@ class DelayLine(BaseModel):
     LineName: str
     status: str
     detail: str
-    AnnouncedTime: Optional[datetime]
+    AnnouncedTime: datetime
+
+    def __str__(self):
+        return f"{self.LineName}: {self.status}\n{self.detail}\n{self.AnnouncedTime} 発表"
 
 def force_list(v: Any) -> List[Any]:
     if v is None: return []
