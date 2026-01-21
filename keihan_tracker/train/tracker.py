@@ -129,9 +129,10 @@ class TrainData(BaseModel):
     """
     master:     "KHTracker"
     wdfBlockNo:int
+    date:datetime.date
     has_premiumcar: Optional[bool]
     train_formation: Optional[int]
-    route_stations: list[StopStationData] = []      # 経路にある駅リスト
+    route_stations: list[StopStationData] = Field(default_factory=list)      # 経路にある駅リスト
     is_completed:bool = False # Falseは必ずしも運行前、運行中であるとは限らない
     delay_minutes: int = 0
 
@@ -201,7 +202,7 @@ class TrainData(BaseModel):
             return TrainType.LOCAL
 
         # 対象外路線
-        if getattr(self, "line", "") not in ["京阪本線・鴨東線", "中之島線"]:
+        if self.line not in ["京阪本線・鴨東線", "中之島線"]:
             return TrainType.LOCAL
 
         # 1. 【普通】 
@@ -356,7 +357,6 @@ class ActiveTrainData(TrainData):
     lastpass_station:   Optional[StationData] = None
     cars :          int             # 車両数
     delay_text:     MultiLang       # 遅延時間（テキスト）
-    route_stations: list[StopStationData] = []      # 経路にある駅リスト
 
     # サイト上で列車位置を表示するときのグリッド座標
     location_col: int
@@ -470,7 +470,8 @@ class ActiveTrainData(TrainData):
             has_premiumcar=self.has_premiumcar,
             train_formation=self.train_formation,
             route_stations=self.route_stations,
-            is_completed=True
+            is_completed=True,
+            date=self.date
         )
         return train
 
@@ -601,15 +602,23 @@ class KHTracker:
         res.raise_for_status()
         self.train_position_list = trainPositionList.model_validate(json.loads(res.text))
         del res
-        
-        # 古い車両データを削除する
+
+        old_wdfs: list[int] = []
+        # 前日の列車があれば削除
+        for wdf, train in self.trains.items():
+            if train.date != self.date:
+                old_wdfs.append(wdf)
+        for wdf in old_wdfs:
+            del self.trains[wdf]
+
+        # もう運行終了したActiveTrainDataをinactive化する
         # 1. 現在アクティブな列車集合を取得
         current_wdfs:set[int] = set()
         for trainlist in self.train_position_list.locationObjects:
             for train in trainlist.trainInfoObjects:
                 current_wdfs.add(train.wdfBlockNo)
 
-        # 2. self.trainsに存在するが、アクティブな列車集合にない古いwdfを削除する
+        # 2. 差集合で もうアクティブでなくなった列車を計算
         wdfs_to_delete = set([train for train in self.trains.keys()]) - current_wdfs
         for wdf in wdfs_to_delete:
             if isinstance(self.trains[wdf], ActiveTrainData):
@@ -625,6 +634,7 @@ class KHTracker:
                     self.trains[wdf] = ActiveTrainData(
                         master=self, 
                         wdfBlockNo=wdf,
+                        date=self.date,
                         train_number = train.trainNumber,
                         destination = self.stations[train.destStationNumber],
                         train_type = train.trainTypeJp,
@@ -697,6 +707,7 @@ class KHTracker:
                     wdfBlockNo=wdf,
                     has_premiumcar=bool(train.premiumCar),
                     train_formation=int(train.trainCar),
+                    date=self.date
                 )
             
             self.trains[wdf].train_formation = int(train.trainCar)
