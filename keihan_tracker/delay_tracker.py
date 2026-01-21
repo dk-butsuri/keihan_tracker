@@ -136,13 +136,15 @@ async def get_ekispert_delay(api_key:str, prefs:list[int]=[26,27,28]) -> list[De
         request.raise_for_status()
         res = ResponseModel.model_validate(request.json())
         
-        results=[]
+        results:dict[str,DelayLine] = {}
         for i in res.ResultSet.Information or []:
-            results.append(
-                DelayLine(LineName=i.Line.Name,
-                      status=i.status,
-                      detail=i.Comment[0].text,
-                      AnnouncedTime=i.Datetime
-                      )
+            if i.Line.code in results:
+                if i.Datetime < (results[i.Line.code].AnnouncedTime or datetime.min):
+                    continue
+            results[i.Line.code] = DelayLine(
+                LineName=i.Line.Name,
+                status=i.status,
+                detail=i.Comment[0].text,
+                AnnouncedTime=i.Datetime
             )
-        return results
+        return list(results.values())
