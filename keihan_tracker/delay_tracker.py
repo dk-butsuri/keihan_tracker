@@ -1,5 +1,5 @@
-from pydantic import BaseModel, field_validator
-from typing import Optional, Union
+from pydantic import BaseModel, field_validator, BeforeValidator, Field
+from typing import Optional, Union, Annotated, List, Any
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup as bs
@@ -17,88 +17,65 @@ class DelayLine(BaseModel):
     detail: str
     AnnouncedTime: Optional[datetime]
 
-class Line(BaseModel):
-    corporationIndex: str
-    code: str
-    Name: str
+def force_list(v: Any) -> List[Any]:
+    if v is None: return []
+    if isinstance(v, list): return v
+    return [v]
 
-class Comment(BaseModel):
-    text: str
-    status: str
+AsList = BeforeValidator(force_list)
 
-class Prefecture(BaseModel):
-    code: str
-    Name: str
+# --- モデル定義 (クラス名を変更して衝突を回避) ---
 
-class Station(BaseModel):
-    code: str
-    Name: str
-    Yomi: str
-    Type: str
+class LineData(BaseModel):
+    Name: str = ""
+    code: str = ""
+    corporationIndex: str = ""
 
-class Point(BaseModel):
-    Prefecture: Prefecture
-    Station: Station
+class CommentData(BaseModel):
+    text: str = ""
+    status: str = ""
 
-class Section(BaseModel):
-    Point: list[Point]
+class PrefectureData(BaseModel):
+    Name: str = ""
+    code: str = ""
 
-class Corporation(BaseModel):
-    code: str
-    Name: str
+class StationData(BaseModel):
+    Name: str = ""
+    code: str = ""
+    Type: str = ""
+    Yomi: str = ""
 
-# --- 主要な情報のモデル ---
+class PointData(BaseModel):
+    # フィールド名はJSONに合わせて "Prefecture" だが、型は "PrefectureData" にする
+    Prefecture: PrefectureData = Field(default_factory=PrefectureData)
+    Station: StationData = Field(default_factory=StationData)
 
-class Information(BaseModel):
-    provider: str
-    status: str
-    Line: Line
-    Title: str
-    Comment: list[Comment]
+class SectionData(BaseModel):
+    Point: Annotated[List[PointData], AsList] = []
+
+class CorporationData(BaseModel):
+    Name: str = ""
+    code: str = ""
+
+class InformationData(BaseModel):
+    status: str = ""
+    provider: str = ""
+    Title: str = ""
     Datetime: datetime
     
-    # 修正1: 型定義は最終的に欲しい「list」だけにする（Unionは使わない方が扱いやすい）
-    Section: Optional[list["Section"]] = None
-    Prefecture: list[Prefecture]
-
-    # 修正2: mode='before' を追加。これにより型チェックの前に実行される
-    @field_validator('Section', mode='before')
-    @classmethod
-    def normalize_section(cls, v):
-        """
-        入力が単体の辞書(dict)ならリストに変換し、NoneならNoneを返す。
-        リストならそのまま返す。
-        """
-        if v is None:
-            return None
-        if isinstance(v, dict):
-            return [v]
-        return v
-
-    # 修正3: こちらも mode='before' を追加
-    @field_validator('Prefecture', mode='before')
-    @classmethod
-    def normalize_prefecture(cls, v):
-        """
-        入力が単体の辞書(dict)ならリストに変換する。
-        """
-        if isinstance(v, dict):
-            return [v]
-        return v
-
-# --- ルート構造の定義 ---
-class ResultSetData(BaseModel):
-    # ...
-    Information: Optional[list["Information"]] = None
-    Corporation: Optional[list["Corporation"]] = None
-
-    @field_validator('Information', 'Corporation', mode='before')
-    @classmethod
-    def normalize_list(cls, v):
-        if v is None: return []
-        if isinstance(v, dict): return [v] # 辞書ならリストで包む
-        return v
+    # ここでもフィールド名と型名を区別する
+    Line: LineData = Field(default_factory=LineData)
     
+    Section: Annotated[List[SectionData], AsList] = []
+    Comment: Annotated[List[CommentData], AsList] = []
+    Prefecture: Annotated[List[PrefectureData], AsList] = []
+
+class ResultSetData(BaseModel):
+    apiVersion: str = ""
+    engineVersion: str = ""
+    Information: Annotated[List[InformationData], AsList] = []
+    Corporation: Annotated[List[CorporationData], AsList] = []
+
 class ResponseModel(BaseModel):
     ResultSet: ResultSetData
 
