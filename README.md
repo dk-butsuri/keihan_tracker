@@ -9,15 +9,15 @@
 ## 概要
 京阪電車公式APIのJSONデータをPydanticモデルでバリデートし、Pythonクラスから駅・路線・列車・ダイヤ情報を直感的に操作できるライブラリです。
 
-**v2.0 Update:**
-データ構造を大幅に刷新し、**「現在走行中の列車」だけでなく、「運行予定の列車（ダイヤ情報）」も統合して扱えるようになりました。**
-走行前の列車であっても、停車駅リストから**自動的に列車種別（特急・急行など）を推定**し、駅の発車標のように「次に来る列車」としてシームレスに取得可能です。
+「現在どこを走っているか」だけでなく、「これからどのような列車が来るか」というダイヤ情報も統合して扱えるため、駅の発車標のようなアプリケーションも簡単に作成できます。
 
 ### 特徴
-- **相互リンク構造**: 「この駅に来る列車」⇔「この列車の次の駅」といった情報を双方向に参照可能。
-- **型安全**: 公式APIのJSONをPydanticで厳密に定義。エディタの補完が効きます。
-- **高度な位置特定**: 路線図上のグリッド座標から「走行中」か「停車中」かを独自ロジックで判定。
-- **バス・遅延情報**: 電車だけでなく、バスの接近情報や関西エリア全体の運行情報も取得可能。
+*   **ダイヤ・位置情報の統合**: 走行中の列車(`ActiveTrainData`)と、これから走る予定の列車(`TrainData`)を統一的に扱えます。
+*   **種別・方向の自動推定**: 予定データ（ダイヤ）には本来含まれていない「列車種別」や「進行方向」を、停車駅リストから自動的に推定します。
+*   **相互リンク構造**: 「この駅に来る列車」⇔「この列車の次の駅」といった情報を双方向に参照可能。
+*   **型安全**: 公式APIのJSONをPydanticで厳密に定義。エディタの補完が効きます。
+*   **高度な位置特定**: 路線図上のグリッド座標から「走行中」か「停車中」かを独自ロジックで判定。
+*   **バス・遅延情報**: 電車だけでなく、バスの接近情報や関西エリア全体の運行情報も取得可能。
 
 ## データ構造と関係性
 本ライブラリは、**全体管理クラス**、**駅クラス**、**列車クラス**が相互に繋がっています。
@@ -34,7 +34,8 @@
         └── [TrainData] (列車)
                ├── .next_stop_station ──→ 次に止まる [StationData]
                ├── .stop_stations     ──→ 停車駅リスト
-               └── .delay_minutes     ──→ 遅延情報
+               ├── .train_type        ──→ [推定] 停車駅に基づく種別
+               └── .direction         ──→ [推定] 始発・終着に基づく方向
 ```
 
 ## インストール
@@ -48,11 +49,10 @@ pip install git+https://github.com/dk-butsuri/keihan_tracker.git
 - pydantic
 - httpx
 - tabulate
-- beautifulsoup4 (遅延情報取得に使用)
+- beautifulsoup4 (Yahoo!遅延情報取得に使用)
+- tzdata (タイムゾーン情報)
 
 ## 使い方
-
-本ライブラリは `asyncio` を使用した非同期コードとして記述する必要があります。
 
 ### 1. 基本的なデータ取得（電車）
 一度だけデータを取得して表示する例です。
@@ -66,6 +66,7 @@ async def main():
     
     # APIから最新データを取得・更新
     # 駅情報などの静的データは初回のみ、列車位置は毎回更新されます
+    # 注意: これを呼ばないとデータは空のままです！
     await tracker.fetch_pos()
 
     # --- 特定の駅から情報を見る ---
@@ -77,18 +78,20 @@ async def main():
     for train, stop_data in station.upcoming_trains:
         # stop_dataにはその駅への到着予定時刻などが含まれます
         time_str = stop_data.time.strftime("%H:%M") if stop_data.time else "不明"
+        # 運行予定の列車でも train_type や direction が推定されます
         print(f"  [{time_str}] {train.train_type.value} {train.destination} 行き")
 
 
     # --- 条件に合う列車を探す ---
     # 例: 「上り（京都方面）」の「特急」を検索
     up_ltd_exp = tracker.find_trains(
-        type=TrainType.LTD_EXP, 
+        train_type=TrainType.LTD_EXP, 
         direction="up"
     )
     
     print("\n【走行中の上り特急】")
     for train in up_ltd_exp:
+        # ActiveTrainData（走行中）の場合、is_stoppingなどが使えます
         status = "停車中" if train.is_stopping else f"走行中 -> 次は {train.next_station}"
         delay = f"(遅れ: {train.delay_minutes}分)" if train.delay_minutes else ""
         print(f"  {train.train_number}号: {status} {delay}")
@@ -154,31 +157,13 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# 出力結果例
-[[9A]] 枚方市駅南口行 行き
-  状況: 約7分後に到着 (予定: 15:53 到着予定)
-  現在地: 緯度34.78445057797146, 経度135.63204188354845
-[[15]] 星田駅行 行き
-  状況: 約17分後に到着 (予定: 16:03 到着予定)
-  現在地: 緯度34.7842008070003, 経度135.64362426647654
-[[9A]] 枚方市駅南口行 行き
-  状況: 約27分後に到着 (予定: 16:13 到着予定)
-  現在地: 緯度34.789917128013336, 経度135.65883940632168
-...
-[[9A]] 枚方市駅南口行 行き
-  状況: 約1時間8分後に到着 (予定: 定刻 16:53)
-  現在地: 緯度0.0, 経度0.0
-[[14]] 津田駅行 行き
-  状況: 約1時間18分後に到着 (予定: 定刻 17:03)
-  現在地: 緯度0.0, 経度0.0
-...
-
 ```
 
 ### 4. 運行情報（遅延情報）の取得
-Yahoo!路線情報から関西エリア（デフォルト）の運行情報をスクレイピングします。 
+遅延情報の取得には2つの方法があります。
 
+#### A. Yahoo!路線情報 (スクレイピング)
+関西エリア（デフォルト）の運行情報を取得します。
 注：Yahoo!路線情報の運行情報は二次利用を禁止しており、私的利用に限ります。
 
 ```python
@@ -189,7 +174,7 @@ async def main():
     # エリアコードを指定可能（デフォルト6=近畿）
     delays = await get_yahoo_delay()
     
-    print("【現在の運行情報】")
+    print("【現在の運行情報 (Yahoo!)】")
     if not delays:
         print("現在、目立った遅延情報はありません。")
     
@@ -199,19 +184,58 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
-# 出力結果例
-【現在の運行情報】
-・JR京都線: 列車遅延
-  13:54頃、琵琶湖線内での線路内点検の影響で、下り線(大阪方面行)の一部列車に遅れが出ています。（12月21日 14時45分掲載）
-
-・湖西線: 運転状況
-  荒天予想の影響で、一部列車に運休が出ています。16:00頃から、和邇〜近江今博駅間の運転を見合わせます。（12月21日 14時30分掲載）
-
-・JR神戸線: 列車遅延
-  13:54頃、琵琶湖線内での線路内点検の影響で、下り線(姫路方面行)の一部列車に遅れが出ています。（12月21日 15時15分掲載）
-
 ```
+
+#### B. 駅すぱあと API (推奨・公式API)
+駅すぱあとのAPIキーをお持ちの場合は、こちらを利用することでより安定して情報を取得できます。
+レスキューナウが提供する信頼性の高い運行情報です。
+
+```python
+import asyncio
+from keihan_tracker.delay_tracker import get_ekispert_delay
+
+async def main():
+    # APIキーを指定して取得
+    # prefs引数で都道府県コードを指定可能（デフォルトは京都・大阪・兵庫）
+    try:
+        delays = await get_ekispert_delay(api_key="YOUR_API_KEY")
+        
+        print("【現在の運行情報 (駅すぱあと)】")
+        for info in delays:
+             print(f"・{info.LineName}: {info.status}")
+             print(f"  {info.detail}\n")
+             
+    except Exception as e:
+        print(f"取得エラー: {e}")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## 知っておくべき仕様・注意点 (ハマりポイント)
+
+初めて使う際に躓きやすいポイントをまとめました。
+
+1.  **非同期処理が必須 (`async`/`await`)**
+    *   本ライブラリは `httpx` を使用した非同期設計です。`tracker.fetch_pos()` などのメソッドは必ず `await` する必要があります。
+    *   通常の `def main():` ではなく、`async def main():` と書き、`asyncio.run(main())` で実行してください。
+
+2.  **`fetch_pos()` を呼ばないとデータは空**
+    *   `KHTracker()` をインスタンス化した直後は、駅データも列車データも空です。
+    *   必ず最初に `await tracker.fetch_pos()` を呼び出してください。また、列車位置は自動更新されないため、最新位置を知るには定期的にこのメソッドを呼ぶ必要があります。
+
+3.  **「走行中」と「予定」の列車クラスの違い**
+    *   **ActiveTrainData**: 現在APIに位置情報が存在する列車です。`is_stopping` (停車中か) や `location_col` (座標) などのリアルタイムなプロパティを持ちます。
+    *   **TrainData**: ダイヤ上の予定データ、または運行終了したデータです。これらには現在位置情報がないため、`is_stopping` などのプロパティにアクセスするとエラーにはなりませんが、常にFalseなどのデフォルト値であったり、意味を持たない場合があります。
+    *   `tracker.trains` には両方が混在しています。区別するには `isinstance(train, ActiveTrainData)` を使用してください。
+
+4.  **駅番号は整数 (int)**
+    *   駅番号（ナンバリング）は `KH01` のような文字列ではなく、数字部分の整数 `1` として扱います。辞書のキーも整数です。
+
+5.  **時刻は日本標準時 (JST)**
+    *   ライブラリ内で扱われる `datetime` オブジェクトには、すべてタイムゾーン情報（`Asia/Tokyo`）が付与されています。
+    *   現在時刻と比較する場合は、`datetime.now()` ではなく `datetime.now(ZoneInfo("Asia/Tokyo"))` などと比較しないとエラーになる場合があります。
+
 ## クラスリファレンス
 
 ### KHTracker (電車)
@@ -226,27 +250,36 @@ if __name__ == "__main__":
 *   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。
 *   `find_trains(...)`: 条件（種別、方向、遅延有無など）に合致する列車をリストで返します。
 
-### TrainData (電車)
-列車情報を表す基底クラス。運行予定や運行終了済みの列車もこれに含まれます。
+### 列車データの構造 (TrainData と ActiveTrainData)
 
+本ライブラリでは、列車の状態によって2つのクラスが使われます。
+`ActiveTrainData` は `TrainData` を継承しており、**「TrainDataの全情報 ＋ リアルタイム位置情報」** を持っています。
+
+| 項目 | TrainData (予定・終了) | ActiveTrainData (走行中) | 備考 |
+| :--- | :--- | :--- | :--- |
+| **基本情報** | ○ | ○ | ID, 編成, 行先など |
+| **ダイヤ情報** | ○ | ○ | 停車駅リスト, 時刻表 |
+| **列車種別** | △ **[推定]** | ◎ **[確定]** | 予定データは停車駅から推定 |
+| **進行方向** | △ **[推定]** | ◎ **[確定]** | 予定データは始発・終着から推定 |
+| **現在位置** | × | **○** | 座標, 停車中判定 |
+| **遅延情報** | × | **○** | 遅延分数 |
+
+#### TrainData (基底クラス)
+全ての列車のベースとなるクラスです。主にダイヤ情報（静的な予定）を保持します。
 *   `wdfBlockNo: int`: 列車管理番号
-*   `train_formation: Optional[int]`: 編成番号
-*   `has_premiumcar: Optional[bool]`: プレミアムカー有無
 *   `destination: StationData`: 行先駅
-*   `status`: 運行状況 ("active"(走行中), "scheduled"(予定), "completed"(終了))
 *   `stop_stations: list[StopStationData]`: 全停車駅のリスト
-*   `start_station: StationData`: 始発駅
+*   `train_type`: **[推定]** 停車駅パターンから推定された種別
+*   `direction`: **[推定]** 始発・終着から推定された方向 ("up"|"down")
 
-### ActiveTrainData (電車)
-`TrainData` を継承した、現在走行中の列車を表すクラス。
-
-*   `train_number: str`: 列車番号
-*   `train_type: TrainType`: 種別 (LTD_EXP, EXPRESS, LOCAL 等)
-*   `direction`: "up"(京都方面) / "down"(大阪方面)
-*   `is_stopping: bool`: **[算出]** 現在、駅に停車中かどうか
-*   `next_stop_station: StationData`: 次の停車駅（停車中の場合はその駅）
+#### ActiveTrainData (継承クラス)
+現在走行中の列車です。`TrainData` に加え、以下の**リアルタイム情報**を持ちます。
+*   `is_stopping: bool`: **[重要]** 現在、駅に停車中かどうか
+*   `next_stop_station: StationData`: **[重要]** 次に停車する駅（停車中の場合はその駅）
 *   `delay_minutes: int`: 遅延分数（定刻なら0）
-*   `cars: int`: 車両数
+*   `train_number: str`: 列車番号 (例: "A1201A")
+*   `cars: int`: 両数
+*   `location_col`, `location_row`: 路線図上のグリッド座標
 
 ### StationData (電車)
 駅を表すクラス。
@@ -254,7 +287,7 @@ if __name__ == "__main__":
 *   `station_number: int`: 駅番号 (例: 1)
 *   `station_name: MultiLang`: 駅名（.ja, .en 等）
 *   `arriving_trains: list[TrainData]`: 「次はこの駅に止まる」という状態の列車リスト。
-*   `upcoming_trains: list[tuple[TrainData, StopStationData]]`: この駅に今後停車するすべての列車とその予定時刻等のリスト。
+*   `upcoming_trains: list[tuple[TrainData, StopStationData]]`: この駅に今後停車するすべての列車とその予定時刻等のリスト（時刻順）。
 
 ### BusLocationResponse / BusStatePrms (バス)
 バス接近情報のレスポンスモデル。
@@ -268,17 +301,11 @@ if __name__ == "__main__":
     *   `lat`, `lon`: バスの現在座標
 
 ### DelayLine (遅延情報)
-Yahoo!路線情報から取得した遅延情報モデル。
+Yahoo!路線情報または駅すぱあとから取得した遅延情報モデル。
 
 *   `LineName: str`: 路線名 (例: "京阪本線")
 *   `status: str`: 状態概要 (例: "遅延")
 *   `detail: str`: 詳細な遅延理由や状況のテキスト
-
-## 制限事項・注意点
-- **停車判定の仕様**: APIは「駅ID」ではなく「路線図上の座標(col, row)」しか返しません。本ライブラリは座標から駅と停車状態を逆算する独自のロジックを使用しています。公式サイトのレイアウト変更等により、判定がずれる可能性があります。
-- **取得できる列車**: `fetch_pos()` では現在走行中または準備中のアクティブな列車情報を更新します。ダイヤ情報 (`startTimeList`) により、当日の運行予定列車も `TrainData` として取得可能ですが、リアルタイムな位置情報はアクティブな列車 (`ActiveTrainData`) のみが持ちます。
-- **バス・遅延情報**: これらは外部サイト（京阪バスナビ、Yahoo!路線情報）の構造変更により、予告なく取得できなくなる可能性があります。
-- **利用用途**: 情報を二次利用、商用などする際には必ず情報提供元サイトに問い合わせ、許諾を得てください。
 
 ## 公式APIエンドポイント
 本ライブラリは以下の公開JSONを利用しています。
