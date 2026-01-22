@@ -1,5 +1,12 @@
 # 遅延情報はデータ形式が不明のため未実装
 
+if __name__ == "__main__":
+    print()
+    print("### keihan_tracker - 京阪電車・バスの接近情報解析ライブラリ ###\n")
+    print("This is not an executable script. Please refer to README.md.")
+    print("このスクリプトは直接実行できません。README.mdを参照してください。")
+    exit()
+
 from .schemes import (TransferGuideInfo,
                       FileList,  
                       SelectStation, 
@@ -499,7 +506,7 @@ class KHTracker:
     - trains: 全列車の辞書（列車管理番号:TrainData）
     - fetch_pos, fetch_dia でAPIから最新情報取得
     """
-    def __init__(self) -> None:
+    def __init__(self, rate_limit:float = 15) -> None:
         #パースしたJSONデータ（BaseModel）
         self.transfer_guide_info: Optional[TransferGuideInfo] = None # 駅ごとの乗り入れデータ
         self.select_station: Optional[SelectStation] = None          # 路線ごとの駅名データ
@@ -509,6 +516,8 @@ class KHTracker:
         self.date: datetime.date = datetime.datetime.now(JST).date()    # 日度（始発から終電までを1日とする日付）
         self.web = AsyncClient()
 
+        self.last_fetch_pos_datetime: Optional[datetime.datetime] = None # 最後にfetch_posを行った時刻
+        self.rate_limit_interval:float = rate_limit                      # アクセス間隔
         # wdfBlockNo:TrainData
         ## 現在アクティブな列車リスト
         self.trains:dict[int, TrainData|ActiveTrainData] = {}
@@ -582,7 +591,7 @@ class KHTracker:
 
     #動的データを更新
     async def fetch_pos(self):
-        "列車走行位置を更新します。30秒～数分に一回が適切でしょう。"
+        "列車走行位置を更新します。1分に1回が適切でしょう。"
         #不変データをダウンロード
         if not self.select_station:
             res = await self.web.get("https://www.keihan.co.jp/zaisen/select_station.json")
@@ -611,7 +620,16 @@ class KHTracker:
                 number = int(number[2:])
                 self.stations[number].transfer = transfers
         
-        #列車位置を取得
+        # レート制限
+        now = datetime.datetime.now(tz=JST)
+        if self.last_fetch_pos_datetime:
+            # 前回の取得 + 制限interval
+            next_fetch = self.last_fetch_pos_datetime + datetime.timedelta(seconds=self.rate_limit_interval)
+            if now <= next_fetch:
+                return
+        
+        # 列車位置を取得
+        self.last_fetch_pos_datetime = now
         res = await self.web.get("https://www.keihan.co.jp/zaisen-up/trainPositionList.json")
         res.raise_for_status()
         self.train_position_list = trainPositionList.model_validate(json.loads(res.text))
@@ -813,6 +831,3 @@ class KHTracker:
         """現在の最大遅延分数"""
         return self.max_delay_train.delay_minutes if isinstance(self.max_delay_train, ActiveTrainData) else 0
 
-if __name__ == "__main__":
-    tracker = KHTracker()
-    print(tracker.trains)
