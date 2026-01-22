@@ -536,17 +536,17 @@ class KHTracker:
         trains: list[TrainData|ActiveTrainData] = []
         for train in self.trains.values():
             # 条件に合致するかチェック
-            if status and status != train.status:
+            if status is not None       and status != train.status:
                 continue
-            if train_type and train.train_type != train_type:
+            if train_type is not None   and train.train_type != train_type:
                 continue
             if has_premiumcar is not None and train.has_premiumcar != has_premiumcar:
                 continue
-            if destination and train.destination != destination:
+            if destination is not None  and train.destination != destination:
                 continue
-            if min_delay and train.delay_minutes <= min_delay:
+            if min_delay is not None    and train.delay_minutes <= min_delay:
                 continue
-            if max_delay and train.delay_minutes >= max_delay:
+            if max_delay is not None    and train.delay_minutes >= max_delay:
                 continue
 
             if isinstance(train, ActiveTrainData):
@@ -730,6 +730,7 @@ class KHTracker:
                     self.trains[wdf].route_stations.append(
                         StopStationData(
                             is_start = True,
+                            is_final=False,
                             is_stop = True,
                             station = station,
                             time = None
@@ -756,9 +757,10 @@ class KHTracker:
                             time = time
                             )
                         )
-            self.trains[wdf].route_stations[0].is_start = True
-            self.trains[wdf].route_stations[-1].is_final = True
-                    
+            # 終着駅
+            final_station = max(self.trains[wdf].route_stations, key=lambda x:x.time or datetime.datetime.min.replace(tzinfo=JST))
+            final_station.is_final = True
+
         return self
 
     async def fetch_filelist(self):
@@ -790,12 +792,12 @@ class KHTracker:
     @property
     def max_delay_train(self) -> TrainData:
         """現在もっとも遅延している運行中の列車"""
-        return max(self.trains.values(), key=lambda x:x.delay_minutes if isinstance(x,ActiveTrainData) else 0)
+        return max(self.trains.values(), key=lambda x:x.delay_minutes if isinstance(x, ActiveTrainData) else 0)
 
     @property
     def max_delay_minutes(self) -> int:
         """現在の最大遅延分数"""
-        return self.max_delay_train.delay_minutes if isinstance(self.max_delay_train,ActiveTrainData) else 0
+        return self.max_delay_train.delay_minutes if isinstance(self.max_delay_train, ActiveTrainData) else 0
 
 if __name__ == "__main__":
     tracker = KHTracker()
