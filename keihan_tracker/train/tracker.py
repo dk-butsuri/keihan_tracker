@@ -135,6 +135,9 @@ class TrainData(BaseModel):
     route_stations: list[StopStationData] = Field(default_factory=list)      # 経路にある駅リスト
     is_completed:bool = False # Falseは必ずしも運行前、運行中であるとは限らない
     delay_minutes: int = 0
+    # 以下はActiveだった時のデータを保持する変数
+    actual_train_type: Optional[TrainType] = None
+    actual_direction: Optional[Literal["up","down"]] = None
 
     @property
     def line(self) -> LineLiteral:
@@ -151,6 +154,10 @@ class TrainData(BaseModel):
     @property
     def direction(self) -> Literal["up","down"]:
         """始発・終着駅から方向を推定する"""
+        # アクティブ時のデータが残っているならそのまま返す
+        if self.actual_direction is not None:
+            return self.actual_direction
+
         if self.line == "交野線":
             # 私市行きなら下り
             if self.destination == self.master.stations[67]:
@@ -181,6 +188,10 @@ class TrainData(BaseModel):
         """
         停車駅リストに基づいて列車種別を推定する
         """
+        # アクティブ時のデータが残っているならそのまま返す
+        if self.actual_train_type is not None:
+            return self.actual_train_type
+
         stop_stations_list = [stop.station for stop in self.stop_stations]
 
         try:
@@ -464,9 +475,12 @@ class ActiveTrainData(TrainData):
         return text + tabulate(body,header)
     
     def inactivate(self) -> TrainData:
+        """非アクティブ化する際に実行。遅延・位置等のリアルタイム情報は削除される。"""
         train = TrainData(
             master=self.master,
             wdfBlockNo=self.wdfBlockNo,
+            actual_train_type=self.train_type,
+            actual_direction=self.direction,
             has_premiumcar=self.has_premiumcar,
             train_formation=self.train_formation,
             route_stations=self.route_stations,
