@@ -10,8 +10,8 @@ import datetime
 sys.path.append(os.getcwd())
 
 from keihan_tracker import KHTracker
-from keihan_tracker.train import stations_map
-from keihan_tracker.train.tracker import ActiveTrainData
+from keihan_tracker.keihan_train import stations_map
+from keihan_tracker.keihan_train.tracker import ActiveTrainData
 
 PORT = 8000
 DATA_CACHE = None
