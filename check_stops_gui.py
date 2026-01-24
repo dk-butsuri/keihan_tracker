@@ -93,17 +93,15 @@ async def fetch_tracker_data():
             "status": "unknown"
         }
         
-        try:
-            if hasattr(train, 'is_stopping') and hasattr(train, 'next_station'):
-                is_stopping = train.is_stopping
-                next_st = train.next_station
-                
-                if next_st:
-                    current_pos["is_stopping"] = is_stopping
-                    current_pos["station_id"] = next_st.station_number
-                    current_pos["status"] = "stopping" if is_stopping else "moving"
-        except Exception:
-            pass
+        if isinstance(train, ActiveTrainData):
+            is_stopping = train.is_stopping
+            next_st = train.next_station
+            
+            if next_st:
+                current_pos["is_stopping"] = is_stopping
+                current_pos["station_id"] = next_st.station_number
+                current_pos["status"] = "stopping" if is_stopping else "moving"
+    
 
         train_data = {
             "id": wdf,
