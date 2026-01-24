@@ -194,6 +194,7 @@ class TrainData(BaseModel):
     def train_type(self) -> TrainType:
         """
         停車駅リストに基づいて列車種別を推定する
+        【注：ライナーは仕様上、快速急行または特急と判定される。】
         """
         # アクティブ時のデータが残っているならそのまま返す
         if self.actual_train_type is not None:
@@ -251,8 +252,7 @@ class TrainData(BaseModel):
                 if st_fushimiinari in stop_stations_list:
                     return TrainType.EXPRESS
                 
-                if "ライナー" in getattr(self, 'name', ''):
-                    return TrainType.LINER
+                # return TrainType.LINER
                 return TrainType.LTD_EXP
             
             else:
@@ -287,8 +287,7 @@ class TrainData(BaseModel):
             if st_neyagawashi in stop_stations_list:
                 return TrainType.COMMUTER_RAPID_EXP # 通勤快急
             else:
-                if "ライナー" in getattr(self, 'name', ''):
-                    return TrainType.LINER
+                # return TrainType.LINER
                 return TrainType.LTD_EXP # 特急
 
     # 始発駅（is_startがTrueの停車駅のうち1番目を返す）
@@ -296,7 +295,7 @@ class TrainData(BaseModel):
     def start_station(self) -> StationData:
         start_stations = [station for station in self.route_stations if station.is_start]
         if len(start_stations) != 1:
-            raise ValueError(f"始発駅が複数登録されています。これはバグです。\n({start_stations})")
+            raise ValueError(f"[WDF{self.wdfBlockNo}] 始発駅が{len(start_stations)}個登録されています。これはバグです。\n({start_stations})")
         station = start_stations[0].station
         return station
 
@@ -304,7 +303,7 @@ class TrainData(BaseModel):
     def destination(self) -> StationData:
         stop_stationdata = [station for station in self.route_stations if station.is_final]
         if len(stop_stationdata) != 1:
-            raise ValueError(f"終着駅が複数登録されています。これはバグです。\n({stop_stationdata})")
+            raise ValueError(f"[WDF{self.wdfBlockNo}] 終着駅が{len(stop_stationdata)}個登録されています。これはバグです。\n({stop_stationdata})")
         station = stop_stationdata[0].station
         return station
     
@@ -343,7 +342,7 @@ class TrainData(BaseModel):
         text += f'{self.train_formation}編成 {"プレミアムカー付き /" if self.has_premiumcar else ""}\n'
 
         header = ["到着時刻","停車駅","ホーム番線"]
-        body = []
+        body:list[list[str]] = []
         for stop in self.stop_stations:
             if stop.time != None:
                 body.append([f"{stop.time.hour:02}:{stop.time.minute:02}", f"{stop.station}"])
@@ -351,7 +350,7 @@ class TrainData(BaseModel):
                 body.append([f"出発駅",f"{stop.station}"])
             else:
                 body.append([f"不明",f"{stop.station}"])
-        return text + tabulate(body,header)
+        return text + tabulate(body, header)
     
     # masterの型を許可する
     model_config = {"arbitrary_types_allowed": True}
@@ -395,19 +394,19 @@ class ActiveTrainData(TrainData):
     @property
     def is_stopping(self) -> bool:
         """列車が停車中かどうか"""
-        line, st1, st2 = calc_position(self.location_col, self.location_row)
+        _, _, st2 = calc_position(self.location_col, self.location_row)
         # st2がなければ停車中
         return True if not st2 else False
     
     @property
     def line(self) -> LineLiteral:
-        line, st1, st2 = calc_position(self.location_col, self.location_row)
+        line, _, _ = calc_position(self.location_col, self.location_row)
         return line
 
     @property
     def next_station(self):
         """停車中の駅、もしくは次に停車（通過）する駅を返します。"""
-        line, st1, st2 = calc_position(self.location_col, self.location_row)
+        _, st1, st2 = calc_position(self.location_col, self.location_row)
         if not st2:
             return self.master.stations[st1]
         else:
@@ -467,11 +466,11 @@ class ActiveTrainData(TrainData):
     def __str__(self) -> str:
         text = f'【{"上り線" if self.direction == "up" else "下り線"}】 {"臨時" if self.is_special else ""}{self.train_type.value} {self.train_number}号: {self.destination or "不明"}行き {self.train_formation}編成/{self.cars}両 '
         text += f'(col, row: {self.location_col}, {self.location_row})\n'\
-        f'{"プレミアムカー付き /" if self.has_premiumcar else ""}遅延：{self.delay_minutes if self.delay_minutes != None else "不明"} 分\n'
-        text += f'次の停車駅は【{self.next_stop_station}駅】\n\n' if not self.is_stopping else f"【{self.next_station}駅】に停車中\n\n"
+        f'{"プレミアムカー付き /" if self.has_premiumcar else ""}遅延：{self.delay_minutes} 分\n'
+        text += f'次の停車駅は【{self.next_stop_station or "不明"}駅】\n\n' if not self.is_stopping else f"【{self.next_station}駅】に停車中\n\n"
 
         header = ["到着時刻","停車駅","ホーム番線"]
-        body = []
+        body:list[list[str]] = []
         for stop in self.route_stations:
             if stop.time != None:
                 body.append([f"{stop.time.hour:02}:{stop.time.minute:02}", f"{stop.station}"])
@@ -513,9 +512,12 @@ class KHTracker:
         self.starttime_list: Optional[startTimeList] = None          # 列車ごとの駅到着時刻データ
         self.train_position_list: Optional[trainPositionList] = None # 列車の種別・位置・遅延情報データ
         self.file_list: Optional[FileList] = None
-        self.date: datetime.date = datetime.datetime.now(JST).date()    # 日度（始発から終電までを1日とする日付）
+        self.date: datetime.date = datetime.datetime.now(JST).date()   # 日度（始発から終電までを1日とする日付）
+        # 深夜帯は-1日することで27時の扱い
+        if 0 <= datetime.datetime.now(JST).hour <= 5:
+            self.date = self.date - datetime.timedelta(days=1)
+        
         self.web = AsyncClient()
-
         self.last_fetch_pos_datetime: Optional[datetime.datetime] = None # 最後にfetch_posを行った時刻
         self.rate_limit_interval:float = rate_limit                      # アクセス間隔
         # wdfBlockNo:TrainData
@@ -789,6 +791,13 @@ class KHTracker:
                             time = time
                             )
                         )
+            
+            # まれに始発駅に時刻が登録される場合あり
+            # https://web.archive.org/web/20260124090959/https://www.keihan.co.jp/zaisen-up/startTimeList.json?6f4653a2-5a0a-4a65-810d-f1917026b14b
+            if len([stop for stop in self.trains[wdf].route_stations if stop.is_start]) == 0:
+                start_station = min(self.trains[wdf].route_stations, key=lambda x:x.time or datetime.datetime.max.replace(tzinfo=JST))
+                start_station.is_start = True
+
             # 終着駅
             final_station = max(self.trains[wdf].route_stations, key=lambda x:x.time or datetime.datetime.min.replace(tzinfo=JST))
             final_station.is_final = True
@@ -830,4 +839,3 @@ class KHTracker:
     def max_delay_minutes(self) -> int:
         """現在の最大遅延分数"""
         return self.max_delay_train.delay_minutes if isinstance(self.max_delay_train, ActiveTrainData) else 0
-
