@@ -17,7 +17,8 @@
 *   **相互リンク構造**: 「この駅に来る列車」⇔「この列車の次の駅」といった情報を双方向に参照可能。
 *   **型安全**: 公式APIのJSONをPydanticで厳密に定義。エディタの補完が効きます。
 *   **高度な位置特定**: 路線図上のグリッド座標から「走行中」か「停車中」かを独自ロジックで判定。
-*   **バス・遅延情報**: 電車だけでなく、バスの接近情報や関西エリア全体の運行情報も取得可能。
+*   **バス・遅延情報**: 電車だけでなく、京阪バスの接近情報や関西エリア全体の運行情報も取得可能。
+*   **レートリミット内蔵**: サーバー負荷を考慮し、15秒/reqのレート制限を内蔵。意図しない高頻度取得を防ぎます。
 
 ## データ構造と関係性
 本ライブラリは、**全体管理クラス**、**駅クラス**、**列車クラス**が相互に繋がっています。
@@ -27,8 +28,8 @@
   │
   ├── .stations (全駅: dict)
   │     └── [StationData] (駅)
-  │            ├── .upcoming_trains ──→ この駅に来る [TrainData] のリスト
-  │            └── .transfer        ──→ 乗り換え路線情報
+  │            ├── .upcoming_trains ──→ 停車中・今後この駅に停車する [TrainData] のリスト
+  │            └── .arriving_trains ──→ 停車中・次にこの駅に停車する [TrainData]のリスト
   │
   └── .trains   (全列車: dict)
         └── [TrainData|ActiveTrainData] (列車)
@@ -46,6 +47,7 @@ pip install git+https://github.com/dk-butsuri/keihan_tracker.git
 ```
 
 ## 依存パッケージ
+```pip install```時にインストールされます。
 - Python 3.10+
 - pydantic
 - httpx
@@ -129,8 +131,8 @@ async def watch_loop():
         except Exception as e:
             print(f"更新エラー: {e}")
 
-        # 30秒待機 (サーバー負荷軽減のため短すぎる間隔は避けてください)
-        await asyncio.sleep(30)
+        # 60秒待機 (サーバー負荷軽減のため短すぎる間隔は避けてください)
+        await asyncio.sleep(60)
 
 if __name__ == "__main__":
     try:
@@ -147,7 +149,7 @@ import asyncio
 from keihan_tracker.bus.tracker import get_khbus_info
 
 async def main():
-    # バス停名と番号を指定（番号は通常1ですが、のりばや方向によって異なります）
+    # バス停名と番号を指定（番号はのりばや方向によって異なります）
     bus_info = await get_khbus_info("京阪香里園", 1)
 
     for bus in bus_info.body.busstates:
@@ -162,10 +164,12 @@ if __name__ == "__main__":
 
 ### 4. 運行情報（遅延情報）の取得
 遅延情報の取得には2つの方法があります。
-
+* Yahoo!路線情報 (スクレイピング)
+* 駅すぱあと 運行情報API（要契約）
 #### A. Yahoo!路線情報 (スクレイピング)
-関西エリア（デフォルト）の運行情報を取得します。
-注：Yahoo!路線情報の運行情報は二次利用を禁止しており、私的利用に限ります。
+関西エリア（デフォルト）の運行情報を取得します。 
+
+**注：Yahoo!路線情報の運行情報は二次利用を禁止しており、私的利用に限ります。**
 
 ```python
 import asyncio
@@ -187,7 +191,7 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-#### B. 駅すぱあと API (推奨・公式API)
+#### B. 駅すぱあと API
 駅すぱあとのAPIキーをお持ちの場合は、こちらを利用することでより安定して情報を取得できます。
 レスキューナウが提供する信頼性の高い運行情報です。
 
@@ -215,7 +219,7 @@ if __name__ == "__main__":
 
 ## 知っておくべき仕様・注意点 (ハマりポイント)
 
-初めて使う際に躓きやすいポイントをまとめました。
+このライブラリを使用する際の注意点を以下に挙げます。
 
 1.  **非同期処理が必須 (`async`/`await`)**
     *   本ライブラリは `httpx` を使用した非同期設計です。`tracker.fetch_pos()` などのメソッドは必ず `await` する必要があります。
@@ -235,7 +239,7 @@ if __name__ == "__main__":
 
 5.  **時刻は日本標準時 (JST)**
     *   ライブラリ内で扱われる `datetime` オブジェクトには、すべてタイムゾーン情報（`Asia/Tokyo`）が付与されています。
-    *   現在時刻と比較する場合は、`datetime.now()` ではなく `datetime.now(ZoneInfo("Asia/Tokyo"))` などと比較しないとエラーになる場合があります。
+    *   現在時刻と比較する場合は、`datetime.now()` ではなく `datetime.now(ZoneInfo("Asia/Tokyo"))` などと比較しないとエラーになります。
 
 ## クラスリファレンス
 
@@ -244,9 +248,9 @@ if __name__ == "__main__":
 
 *   `stations: dict[int, StationData]`: 駅データ。キーは駅番号の整数値（KH01なら1）。
 *   `trains: dict[int, TrainData | ActiveTrainData]`: 全列車データ（走行中・予定・終了含む）。キーは内部管理番号(WDF)。
-*   `active_trains: dict[int, ActiveTrainData]`: 現在走行中の列車データのみを抽出した辞書。
-*   `date: datetime.date`: 現在の営業日（深夜帯は前日扱い）。
-
+*   `active_trains: dict[int, ActiveTrainData]`: 現在走行中の列車データのみを抽出した辞書
+*   `date: datetime.date`: 現在の営業日（24-5時の深夜帯は前日扱い）
+*   `max_delay_train: TrainData`: 最も遅延している列車
 #### 主要メソッド
 *   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。
 *   `find_trains(...)`: 条件（種別、方向、遅延有無など）に合致する列車をリストで返します。
@@ -256,39 +260,61 @@ if __name__ == "__main__":
 本ライブラリでは、列車の状態によって2つのクラスが使われます。
 `ActiveTrainData` は `TrainData` を継承しており、**「TrainDataの全情報 ＋ リアルタイム位置情報」** を持っています。
 
+判定する際は`isinstance()`関数を用いると、型厳密に、そしてエディターで入力候補が使用できます。
+
 | 項目 | TrainData (予定・終了) | ActiveTrainData (走行中) | 備考 |
 | :--- | :--- | :--- | :--- |
 | **基本情報** | ◎ | ◎ | ID, 編成, 行先など |
 | **ダイヤ情報** | ◎ | ◎ | 停車駅リスト, 到着時刻 |
-| **列車種別** | △ **[推定]** | ◎ **[確定]** | 予定/終了の場合、停車駅から推定、ライナーは識別不可 |
-| **進行方向** | △ **[推定]** | ◎ **[確定]** | 予定/終了の場合、始発・終着から推定 |
-| **現在位置** | × | **○** | 座標, 停車中判定 |
+| **列車種別** | △ **[推定]** | ◎ | 予定/終了の場合、停車駅から推定、ライナーは識別不可 |
+| **進行方向** | △ **[推定]** | ◎ | 予定/終了の場合、始発・終着から推定 |
+| **現在位置** | × | **○** **[一部推定]** | 座標, 停車中判定 |
 | **遅延情報** | × | **◎** | 遅延分数 |
 
 #### TrainData (基底クラス)
 全ての列車のベースとなるクラスです。主にダイヤ情報（静的な予定）を保持します。
+*   `master`: KHTrackerインスタンス
 *   `wdfBlockNo: int`: 列車管理番号
 *   `destination: StationData`: 行先駅
+*   `start_station: StationData`: 始発駅
 *   `stop_stations: list[StopStationData]`: 全停車駅のリスト
-*   `train_type`: **[推定]** 停車駅パターンから推定された種別
-*   `direction`: **[推定]** 始発・終着から推定された方向 ("up"|"down")
+*   `route_stations: list[StopStationData]`: 停車・通過駅のリスト（一部の通過駅のみが含まれる）
+*   `has_premiumcar: Optional[bool]`: プレミアムカーがあるか
+*   `delay_minutes: int` 遅延分数（0を返す）
+*   `train_formation: Optional[int]` 列車編成（3003など）
+*   `train_type: TrainType`: **[推定]** 停車駅パターンから推定された種別
+*   `direction: Literal["up","down"]`: **[推定]** 始発・終着から推定された方向
+*   `line: LineLiteral`: **[推定]** 列車の走行路線（"京阪本線・鴨東線", "宇治線" など）
+なお、`ActiveTrainData`が運行終了後にTrainDataに降格した際、`direction`と`train_type`は引き継がれます。
 
 #### ActiveTrainData (継承クラス)
 現在走行中の列車です。`TrainData` に加え、以下の**リアルタイム情報**を持ちます。
-*   `is_stopping: bool`: **[重要]** 現在、駅に停車中かどうか
-*   `next_stop_station: StationData`: **[重要]** 次に停車する駅（**停車中の場合はその駅**）
+*   `is_stopping: bool`: 現在、駅に停車中かどうか
+*   `next_stop_station: StationData`: 次に停車する駅（**停車中の場合はその駅**）
+*   `next_station: StationData`: 次に停車・**通過**する駅
 *   `delay_minutes: int`: 遅延分数（定刻なら0）
+*   `delay_text: MultiLang`: 遅延テキスト（「約5分」など各言語で）
 *   `train_number: str`: 列車番号 (例: "1051"（号）など)
 *   `cars: int`: 車両数
 *   `location_col`, `location_row`: zaisen上のグリッド座標
+*   `is_special: bool`: 臨時列車かどうか
 
 ### StationData (電車)
 駅を表すクラス。
 
 *   `station_number: int`: 駅番号 (例: 1)
 *   `station_name: MultiLang`: 駅名（.ja, .en 等）
-*   `arriving_trains: list[TrainData]`: 「次はこの駅に止まる」という状態の列車リスト。
-*   `upcoming_trains: list[tuple[TrainData, StopStationData]]`: この駅に今後停車するすべての列車とその予定時刻等のリスト（時刻順）。
+*   `arriving_trains: list[TrainData]`: 停車中、もしくは**次に**停車する全列車
+*   `upcoming_trains: list[tuple[TrainData, StopStationData]]`: 停車中、にもしくは**今後**停車する全列車とその到着時刻のリスト（時刻順）。
+* `line: set[LineLiteral]`: 所属路線（例: {"京阪本線・鴨東線", "中之島線"}）
+
+### StopStationData
+列車の停車・通過駅を表すクラス。train.stop_stations や station.upcoming_trains の戻り値に含まれます。
+   * station: StationData: 駅
+   * time: Optional[datetime]: 到着/出発時刻（始発・終着・通過駅などでNoneの場合あり）
+   * is_stop: bool: 停車するかどうか（通過駅ならFalse）
+   * is_start: bool: この駅が始発駅かどうか
+   * is_final: bool: この駅が終着駅かどうか
 
 ### BusLocationResponse / BusStatePrms (バス)
 バス接近情報のレスポンスモデル。

@@ -1,11 +1,19 @@
 import asyncio
-import http.server
-import socketserver
-import webbrowser
-import json
 import sys
 import os
 import datetime
+from contextlib import asynccontextmanager
+import webbrowser
+
+# 必要なライブラリのチェック
+try:
+    from fastapi import FastAPI
+    from fastapi.responses import HTMLResponse, JSONResponse
+    import uvicorn
+except ImportError:
+    print("FastAPI and Uvicorn are required.")
+    print("Please run: pip install fastapi uvicorn")
+    sys.exit(1)
 
 sys.path.append(os.getcwd())
 
@@ -16,132 +24,7 @@ from keihan_tracker.keihan_train.tracker import ActiveTrainData
 PORT = 8000
 DATA_CACHE = None
 
-async def fetch_tracker_data():
-    print("Fetching data from Keihan API...")
-    tracker = KHTracker()
-    await tracker.fetch_pos()
-    
-    lines = {
-        "main": stations_map.HONNSEN_UP,
-        "nakanoshima": stations_map.NAKANOSHIMA_UP,
-        "uji": stations_map.UJI_UP,
-        "katano": stations_map.KATANO_UP
-    }
-    
-    # 駅情報の構築（Upcoming Trains含む）
-    all_stations = {}
-    for st_id, st_data in tracker.stations.items():
-        # Upcoming Trainsの取得
-        upcoming_list = []
-        try:
-            # st_data.upcoming_trains はプロパティ
-            raw_upcoming = st_data.upcoming_trains 
-            for train, stop in raw_upcoming:
-                t_type = train.train_type
-                if hasattr(t_type, 'value'):
-                    t_type = t_type.value
-                
-                time_str = stop.time.strftime("%H:%M") if stop.time else "??:??"
-                
-                # ActiveTrainDataかどうかの判定
-                is_active = isinstance(train, ActiveTrainData)
-                delay = getattr(train, 'delay_minutes', 0) if is_active else 0
-                
-                upcoming_list.append({
-                    "type": t_type,
-                    "dest": str(train.destination) if train.destination else "Unknown",
-                    "time": time_str,
-                    "number": getattr(train, 'train_number', '-'),
-                    "formation": getattr(train, 'train_formation', '-'),
-                    "cars": getattr(train, 'cars', '-'),
-                    "delay": delay,
-                    "is_active": is_active
-                })
-        except Exception as e:
-            print(f"Error getting upcoming trains for {st_id}: {e}")
-
-        all_stations[st_id] = {
-            "id": st_id,
-            "name": st_data.station_name.ja,
-            "upcoming": upcoming_list
-        }
-
-    trains_list = []
-    for wdf, train in tracker.trains.items():
-        stops_data = {}
-        
-        if hasattr(train, 'route_stations'):
-            for s in train.route_stations:
-                st_id = s.station.station_number
-                time_str = s.time.strftime("%H:%M") if s.time else ""
-                
-                stops_data[st_id] = {
-                    "time": time_str,
-                    "is_stop": s.is_stop,
-                    "is_start": s.is_start,
-                    "is_final": s.is_final
-                }
-        
-        t_type = train.train_type
-        if hasattr(t_type, 'value'):
-            t_type = t_type.value
-
-        # 現在位置情報の取得
-        current_pos = {
-            "is_stopping": False,
-            "station_id": None,
-            "status": "unknown"
-        }
-        
-        if isinstance(train, ActiveTrainData):
-            is_stopping = train.is_stopping
-            next_st = train.next_station
-            
-            if next_st:
-                current_pos["is_stopping"] = is_stopping
-                current_pos["station_id"] = next_st.station_number
-                current_pos["status"] = "stopping" if is_stopping else "moving"
-    
-
-        train_data = {
-            "id": wdf,
-            "number": getattr(train, 'train_number', 'Unknown'),
-            "type": t_type,
-            "dest": str(train.destination) if train.destination else "Unknown",
-            "stops": stops_data,
-            "direction": getattr(train, 'direction', 'unknown'),
-            "line": getattr(train, 'line', 'unknown'),
-            "formation": getattr(train, 'train_formation', '-'),
-            "cars": getattr(train, 'cars', '-'),
-            "current_pos": current_pos
-        }
-        trains_list.append(train_data)
-        
-    return {
-        "stations": all_stations,
-        "lines": lines,
-        "trains": trains_list
-    }
-
-class DataHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        global DATA_CACHE
-        if self.path == '/':
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html; charset=utf-8')
-            self.end_headers()
-            self.wfile.write(HTML_CONTENT.encode('utf-8'))
-        elif self.path == '/api/data':
-            if DATA_CACHE is None:
-                self.send_error(503, "Data not ready")
-                return
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json; charset=utf-8')
-            self.end_headers()
-            self.wfile.write(json.dumps(DATA_CACHE, ensure_ascii=False).encode('utf-8'))
-        else:
-            super().do_GET()
-
+# --- HTML Content (Vue.js App) ---
 HTML_CONTENT = """
 <!DOCTYPE html>
 <html lang="ja">
@@ -169,6 +52,8 @@ HTML_CONTENT = """
             top: 0;
             z-index: 30;
             background-color: #f8fafc; /* bg-slate-50 */
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            background-clip: padding-box;
         }
         .sticky-row-header {
             position: sticky;
@@ -176,6 +61,7 @@ HTML_CONTENT = """
             z-index: 20;
             background-color: white;
             box-shadow: 2px 0 5px -2px rgba(0,0,0,0.1);
+            background-clip: padding-box;
         }
         /* 交差する左上のセル */
         .sticky-corner {
@@ -185,6 +71,7 @@ HTML_CONTENT = """
             z-index: 40;
             background-color: #f8fafc;
             box-shadow: 2px 2px 5px -2px rgba(0,0,0,0.1);
+            background-clip: padding-box;
         }
 
         .station-line-through {
@@ -218,16 +105,27 @@ HTML_CONTENT = """
                 </div>
                 <div>
                     <h1 class="text-xl font-bold text-slate-800 tracking-tight">京阪電車 運行モニター</h1>
-                    <p class="text-xs text-slate-500 font-medium">リアルタイム停車駅・遅延状況確認</p>
+                    <div class="flex items-center gap-2">
+                        <p class="text-xs text-slate-500 font-medium">リアルタイム停車駅・遅延状況確認</p>
+                        <span v-if="rawData" class="text-[10px] bg-slate-200 text-slate-600 px-1.5 py-0.5 rounded font-mono">
+                            更新: {{ rawData.last_updated }}
+                        </span>
+                    </div>
                 </div>
             </div>
-            <button @click="fetchData" 
-                    class="group flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-full hover:bg-blue-700 transition shadow-md hover:shadow-lg active:transform active:scale-95">
-                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 group-hover:animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-                </svg>
-                データ更新
-            </button>
+            <div class="flex items-center gap-3">
+                <div v-if="nextRefreshIn > 0" class="text-[10px] font-mono text-slate-400 text-right leading-none">
+                    AUTO REFRESH IN<br>
+                    <span class="text-xs font-bold text-slate-500">{{ nextRefreshIn }}s</span>
+                </div>
+                <button @click="fetchData" 
+                        class="group flex items-center gap-2 px-4 py-2 bg-blue-600 text-white text-sm font-bold rounded-full hover:bg-blue-700 transition shadow-md hover:shadow-lg active:transform active:scale-95">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 group-hover:animate-spin" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                    </svg>
+                    データ更新
+                </button>
+            </div>
         </header>
 
         <!-- コントロールパネル -->
@@ -297,7 +195,7 @@ HTML_CONTENT = """
                         <!-- 駅名ヘッダー -->
                         <th v-for="stId in currentLineStations" :key="stId" 
                             @click="openStationModal(stId)"
-                            class="sticky-col-header station-header border-b border-r border-slate-200 p-2 min-w-[36px] max-w-[40px] align-bottom transition duration-150 relative group">
+                            class="sticky-col-header station-header border-b border-r border-slate-200 p-2 min-w-[36px] max-w-[40px] align-bottom transition duration-150 group">
                             <div class="absolute top-1 right-1 opacity-0 group-hover:opacity-100 text-blue-500">
                                 <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                   <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -343,7 +241,6 @@ HTML_CONTENT = """
                             <div v-if="isStationInRoute(train, idx)" class="station-line-through group-hover:bg-blue-200 transition-colors"></div>
                             
                             <!-- 走行中インジケーター (矢印) -->
-                            <!-- 中央と被らないように左側に配置 -->
                             <div v-if="train.current_pos.station_id === stId && !train.current_pos.is_stopping" 
                                  class="absolute left-0 top-1/2 transform -translate-y-1/2 z-20 ml-0.5 pointer-events-none">
                                  <div class="bg-blue-600 text-white rounded-full p-0.5 shadow-sm animate-bounce">
@@ -457,6 +354,7 @@ HTML_CONTENT = """
                 const selectedLine = ref('main');
                 const selectedDirection = ref('all');
                 const selectedTypes = ref([]);
+                const nextRefreshIn = ref(60);
                 
                 // モーダル用state
                 const showModal = ref(false);
@@ -468,6 +366,7 @@ HTML_CONTENT = """
                         const res = await fetch('/api/data');
                         if (!res.ok) throw new Error('API Error');
                         rawData.value = await res.json();
+                        nextRefreshIn.value = 60; // リセット
                         
                         if (selectedTypes.value.length === 0) {
                              const types = new Set(rawData.value.trains.map(t => t.type));
@@ -475,10 +374,19 @@ HTML_CONTENT = """
                         }
                     } catch (e) {
                         console.error(e);
-                        alert('データの取得に失敗しました');
                     } finally {
                         loading.value = false;
                     }
+                };
+
+                const startTimer = () => {
+                    setInterval(() => {
+                        if (nextRefreshIn.value > 0) {
+                            nextRefreshIn.value--;
+                        } else {
+                            fetchData();
+                        }
+                    }, 1000);
                 };
 
                 const currentLineStations = computed(() => {
@@ -617,6 +525,7 @@ HTML_CONTENT = """
 
                 onMounted(() => {
                     fetchData();
+                    startTimer();
                 });
 
                 return {
@@ -632,6 +541,7 @@ HTML_CONTENT = """
                     modalStationName,
                     modalStationId,
                     modalStationData,
+                    nextRefreshIn,
                     fetchData,
                     getStationName,
                     toggleType,
@@ -647,26 +557,163 @@ HTML_CONTENT = """
 </html>
 """
 
-def main():
-    global DATA_CACHE
-    print("Initializing...")
-    try:
-        DATA_CACHE = asyncio.run(fetch_tracker_data())
-        print(f"Loaded {len(DATA_CACHE['trains'])} trains.")
-    except Exception as e:
-        print(f"Error fetching data: {e}")
-        return
-
-    with socketserver.TCPServer(('', PORT), DataHandler) as httpd:
-        url = f"http://localhost:{PORT}"
-        print(f"Server started at {url}")
-        print("Press Ctrl+C to stop.")
-        webbrowser.open(url)
+async def fetch_tracker_data():
+    print("Fetching data from Keihan API...")
+    tracker = KHTracker()
+    await tracker.fetch_pos()
+    
+    lines = {
+        "main": stations_map.HONNSEN_UP,
+        "nakanoshima": stations_map.NAKANOSHIMA_UP,
+        "uji": stations_map.UJI_UP,
+        "katano": stations_map.KATANO_UP
+    }
+    
+    # 駅情報の構築（Upcoming Trains含む）
+    all_stations = {}
+    for st_id, st_data in tracker.stations.items():
+        # Upcoming Trainsの取得
+        upcoming_list = []
         try:
-            httpd.serve_forever()
-        except KeyboardInterrupt:
-            print("\nShutting down server.")
-            httpd.shutdown()
+            # st_data.upcoming_trains はプロパティ
+            raw_upcoming = st_data.upcoming_trains 
+            for train, stop in raw_upcoming:
+                t_type = train.train_type
+                if hasattr(t_type, 'value'):
+                    t_type = t_type.value
+                
+                time_str = stop.time.strftime("%H:%M") if stop.time else "??:??"
+                
+                # ActiveTrainDataかどうかの判定
+                is_active = isinstance(train, ActiveTrainData)
+                delay = getattr(train, 'delay_minutes', 0) if is_active else 0
+                
+                upcoming_list.append({
+                    "type": t_type,
+                    "dest": str(train.destination) if train.destination else "Unknown",
+                    "time": time_str,
+                    "number": getattr(train, 'train_number', '-'),
+                    "formation": getattr(train, 'train_formation', '-'),
+                    "cars": getattr(train, 'cars', '-'),
+                    "delay": delay,
+                    "is_active": is_active
+                })
+        except Exception as e:
+            print(f"Error getting upcoming trains for {st_id}: {e}")
+
+        all_stations[st_id] = {
+            "id": st_id,
+            "name": st_data.station_name.ja,
+            "upcoming": upcoming_list
+        }
+
+    trains_list = []
+    for wdf, train in tracker.trains.items():
+        stops_data = {}
+        
+        if hasattr(train, 'route_stations'):
+            for s in train.route_stations:
+                st_id = s.station.station_number
+                time_str = s.time.strftime("%H:%M") if s.time else ""
+                
+                stops_data[st_id] = {
+                    "time": time_str,
+                    "is_stop": s.is_stop,
+                    "is_start": s.is_start,
+                    "is_final": s.is_final
+                }
+        
+        t_type = train.train_type
+        if hasattr(t_type, 'value'):
+            t_type = t_type.value
+
+        # 現在位置情報の取得
+        current_pos = {
+            "is_stopping": False,
+            "station_id": None,
+            "status": "unknown"
+        }
+        
+        if isinstance(train, ActiveTrainData):
+            is_stopping = train.is_stopping
+            next_st = train.next_station
+            
+            if next_st:
+                current_pos["is_stopping"] = is_stopping
+                current_pos["station_id"] = next_st.station_number
+                current_pos["status"] = "stopping" if is_stopping else "moving"
+    
+
+        train_data = {
+            "id": wdf,
+            "number": getattr(train, 'train_number', 'Unknown'),
+            "type": t_type,
+            "dest": str(train.destination) if train.destination else "Unknown",
+            "stops": stops_data,
+            "direction": getattr(train, 'direction', 'unknown'),
+            "line": getattr(train, 'line', 'unknown'),
+            "formation": getattr(train, 'train_formation', '-'),
+            "cars": getattr(train, 'cars', '-'),
+            "current_pos": current_pos
+        }
+        trains_list.append(train_data)
+        
+    return {
+        "stations": all_stations,
+        "lines": lines,
+        "trains": trains_list,
+        "last_updated": datetime.datetime.now().strftime("%H:%M:%S")
+    }
+
+# --- Background Task ---
+async def data_updater_loop():
+    global DATA_CACHE
+    while True:
+        try:
+            print("[Background] Updating data...")
+            DATA_CACHE = await fetch_tracker_data()
+            print(f"[Background] Data updated. {len(DATA_CACHE['trains'])} trains.")
+        except Exception as e:
+            print(f"[Background] Update failed: {e}")
+        
+        await asyncio.sleep(60)
+
+# --- FastAPI App Definition ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    print("Starting up...")
+    
+    # 初回データを取得してからサーバーを開始したい場合はここで待つ
+    # await fetch_tracker_data() 
+    
+    # バックグラウンドタスクの開始
+    task = asyncio.create_task(data_updater_loop())
+    
+    yield
+    
+    # Shutdown
+    print("Shutting down...")
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+app = FastAPI(lifespan=lifespan)
+
+@app.get("/", response_class=HTMLResponse)
+async def get_index():
+    return HTML_CONTENT
+
+@app.get("/api/data", response_class=JSONResponse)
+async def get_data():
+    if DATA_CACHE:
+        return DATA_CACHE
+    else:
+        # データがまだない場合は503を返す
+        return JSONResponse(status_code=503, content={"error": "Data is initializing, please wait."})
 
 if __name__ == "__main__":
-    main()
+    webbrowser.open(f"http://localhost:{PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
