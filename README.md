@@ -74,33 +74,21 @@ async def main():
 
     # --- 特定の駅から情報を見る ---
     # 駅番号はKH番号の数字部分です (例: KH01 淀屋橋 -> 1, KH40 三条 -> 40)
-    station = tracker.stations[1] 
+    station = tracker.stations[17] 
     print(f"=== {station.station_name.ja}駅 ===")
-
-    print("【次に来る列車】")
-    for train, stop_data in station.upcoming_trains:
-        # stop_dataにはその駅への到着予定時刻などが含まれます
-        time_str = stop_data.time.strftime("%H:%M") if stop_data.time else "不明"
-        # 運行予定の列車でも train_type や direction が推定されます
-        print(f"  [{time_str}] {train.train_type.value} {train.destination} 行き")
-
-
-    # --- 条件に合う列車を探す ---
-    # 例: 「上り（京都方面）」の「特急」を検索
-    up_ltd_exp = tracker.find_trains(
-        train_type=TrainType.LTD_EXP, 
-        direction="up"
-    )
     
-    print("\n【走行中の上り特急】")
-    for train in up_ltd_exp:
-        # ActiveTrainData（走行中）の場合、is_stoppingなどが使えます
-        status = "停車中" if train.is_stopping else f"走行中 -> 次は {train.next_station}"
-        delay = f"(遅れ: {train.delay_minutes}分)" if train.delay_minutes else ""
-        print(f"  {train.train_number}号: {status} {delay}")
+    # 次の列車を取得
+    next_train, arrival_time = station.upcoming_trains[0]
+    
+    if arrival_time.time is not None:
+        time = arrival_time.time.strftime("%H時%M分 到着予定")
+    else:
+        time = ""
+    
+    print(time)
+    print(next_train)
 
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
 ### 2. リアルタイム監視（ポーリング）
@@ -115,30 +103,23 @@ async def watch_loop():
     tracker = KHTracker()
     
     while True:
-        try:
-            # データを更新
-            await tracker.fetch_pos()
-            
-            # 例: 現在最も遅れている列車を表示
-            worst_train = tracker.max_delay_train
-            max_delay = tracker.max_delay_minutes
+        # データを更新
+        await tracker.fetch_pos()
+        
+        # 例: 現在最も遅れている列車を表示
+        worst_train = tracker.max_delay_train
+        max_delay = tracker.max_delay_minutes
 
-            print(f"\r現在走行中の列車数: {len(tracker.trains)} | 最大遅延: {max_delay}分", end="")
-            
-            if max_delay > 5:
-                 print(f"\n⚠️ {worst_train.train_number}号 ({worst_train.train_type.value}) が {max_delay}分 遅延しています！")
-
-        except Exception as e:
-            print(f"更新エラー: {e}")
+        print(f"\r現在走行中の列車数: {len(tracker.trains)} | 最大遅延: {max_delay}分")
+        
+        if worst_train:
+            print(f"⚠️ {worst_train.train_number}号 ({worst_train.train_type.value}) が {max_delay}分 遅延しています！")
 
         # 60秒待機 (サーバー負荷軽減のため短すぎる間隔は避けてください)
         await asyncio.sleep(60)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(watch_loop())
-    except KeyboardInterrupt:
-        print("\n終了します")
+    asyncio.run(watch_loop())
 ```
 
 ### 3. 京阪バス接近情報の取得
@@ -157,6 +138,7 @@ async def main():
         print(f"[{prms.route}] {prms.destination} 行き")
         print(f"  状況: {prms.status} (予定: {prms.timetable})")
         print(f"  現在地: 緯度{prms.lat}, 経度{prms.lon}")
+        print("\n")
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -202,16 +184,12 @@ from keihan_tracker.delay_tracker import get_ekispert_delay
 async def main():
     # APIキーを指定して取得
     # prefs引数で都道府県コードを指定可能（デフォルトは京都・大阪・兵庫）
-    try:
-        delays = await get_ekispert_delay(api_key="YOUR_API_KEY")
-        
-        print("【現在の運行情報 (駅すぱあと)】")
-        for info in delays:
-             print(f"・{info.LineName}: {info.status}")
-             print(f"  {info.detail}\n")
-             
-    except Exception as e:
-        print(f"取得エラー: {e}")
+    delays = await get_ekispert_delay(api_key="YOUR_API_KEY")
+    
+    print("【現在の運行情報 (駅すぱあと)】")
+    for info in delays:
+        print(f"・{info.LineName}: {info.status}")
+        print(f"  {info.detail}\n")
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -250,7 +228,8 @@ if __name__ == "__main__":
 *   `trains: dict[int, TrainData | ActiveTrainData]`: 全列車データ（走行中・予定・終了含む）。キーは内部管理番号(WDF)。
 *   `active_trains: dict[int, ActiveTrainData]`: 現在走行中の列車データのみを抽出した辞書
 *   `date: datetime.date`: 現在の営業日（24-5時の深夜帯は前日扱い）
-*   `max_delay_train: TrainData`: 最も遅延している列車
+*   `max_delay_train: Optional[TrainData]`: 最も遅延している列車（0分の場合はNoneを返す）
+*   `max_delay_minutes: int`: 現在の最大遅延分数
 #### 主要メソッド
 *   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。
 *   `find_trains(...)`: 条件（種別、方向、遅延有無など）に合致する列車をリストで返します。

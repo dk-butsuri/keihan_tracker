@@ -831,11 +831,19 @@ class KHTracker:
         self.file_list = filelist
 
     @property
-    def max_delay_train(self) -> TrainData:
+    def max_delay_train(self) -> Optional[ActiveTrainData]:
         """現在もっとも遅延している運行中の列車"""
-        return max(self.trains.values(), key=lambda x:x.delay_minutes if isinstance(x, ActiveTrainData) else 0)
+        most_delay_train = max(
+            self.active_trains.values(), 
+            key=lambda x:x.delay_minutes if isinstance(x, ActiveTrainData) else 0,
+            default=None
+            )
+        if most_delay_train:
+            if most_delay_train.delay_minutes == 0:
+                return None
+        return most_delay_train
 
     @property
     def max_delay_minutes(self) -> int:
         """現在の最大遅延分数"""
-        return self.max_delay_train.delay_minutes if isinstance(self.max_delay_train, ActiveTrainData) else 0
+        return self.max_delay_train.delay_minutes if self.max_delay_train else 0
