@@ -80,15 +80,21 @@ class StationData(BaseModel):
                 if not train.next_stop_station:
                     continue
                 
-                # もし始発駅 or selfが次に停車する駅なら
+                # この駅が始発駅 or selfが次に停車する駅なら
                 if train.next_stop_station == self:
+                    trains.append((train,stop))
+                    continue
+
+                # 列車が始発駅にいるなら
+                # 始発駅には停車時刻が設定されていないため先に処理
+                if train.next_stop_station == train.start_station:
                     trains.append((train,stop))
                     continue
 
                 # その列車がこの駅(self)に停車する時刻を取得
                 train_stops_self_time = stop.time
                 # その列車がnext_stationの駅に停車する時刻を取得
-                train_stops_next_time = train.get_stop_time(train.next_stop_station)
+                train_stops_next_time = train.get_stop_time(train.next_stop_station) 
 
                 # どちらかが存在しないならスキップ
                 if not train_stops_next_time or not train_stops_self_time:
@@ -427,6 +433,7 @@ class ActiveTrainData(TrainData):
 
     @property
     def next_stop_station(self) -> Optional[StationData]:
+        """停車中の駅、もしくは次に停車する駅を返します。"""
         next_station = self.next_station.station_number
         stop_stations = [station.station.station_number for station in self.stop_stations]
 
