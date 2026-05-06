@@ -741,6 +741,10 @@ class KHTracker:
 
         # startTimeListからデータを登録
         for train in self.starttime_list.TrainInfo:
+            # 臨時列車は当日の便でない可能性があるためスキップ
+            if train.extTrain:
+                continue
+            
             wdf = train.wdfBlockNo
             if not wdf in self.trains:
                 self.trains[wdf] = TrainData(
