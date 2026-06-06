@@ -376,6 +376,7 @@ class ActiveTrainData(TrainData):
     active_direction:   Literal["up","down"] = Field(alias="direction")     # 方向（up:京都方面、down:大阪方面）
     active_destination: StationData          = Field(alias="destination")   # 行先駅
     is_special:     bool            # 臨時か
+    station_arrival_time: Optional[datetime.datetime] = None # 現在の駅に停車した時刻
     has_premiumcar: Optional[bool] = None
     lastpass_station:   Optional[StationData] = None
     cars :          int             # 車両数
@@ -405,13 +406,26 @@ class ActiveTrainData(TrainData):
         return True if not st2 else False
     
     @property
+    def is_at_start_station(self) -> bool:
+        """始発駅に停車中かどうか"""
+        return self.is_stopping and self.next_stop_station == self.start_station
+
+    @property
+    def stopping_time(self) -> datetime.timedelta:
+        """列車が停車している時間。走行中はtimedelta(0)を返す。"""
+        if self.station_arrival_time:
+            return datetime.datetime.now(tz=JST) - self.station_arrival_time
+        else:
+            return datetime.timedelta(0)
+    
+    @property
     def line(self) -> LineLiteral:
         line, _, _ = calc_position(self.location_col, self.location_row)
         return line
 
     @property
-    def next_station(self):
-        """停車中の駅、もしくは次に停車（通過）する駅を返します。"""
+    def next_station(self) -> StationData:
+        """停車中の駅、もしくは次に停車（通過）する駅を返します。次の停車駅を取得したい場合は代わりにnext_stop_stationを使用してください。"""
         _, st1, st2 = calc_position(self.location_col, self.location_row)
         if not st2:
             return self.master.stations[st1]
@@ -672,7 +686,7 @@ class KHTracker:
                 wdf = train.wdfBlockNo
                 # 存在しない/アクティブでないなら新規作成
                 if self.trains.get(wdf) == None or not isinstance(self.trains.get(wdf), ActiveTrainData):
-                    self.trains[wdf] = ActiveTrainData(
+                    new_active_train = ActiveTrainData(
                         master=self, 
                         wdfBlockNo=wdf,
                         date=self.date,
@@ -695,11 +709,18 @@ class KHTracker:
                         ),
                         delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
                         )
+                    if new_active_train.is_stopping:
+                        new_active_train.station_arrival_time = datetime.datetime.now(tz=JST)
+                    
+                    self.trains[wdf] = new_active_train
+
                 elif type(self.trains[wdf]) == ActiveTrainData:
                     # 可変の情報を更新
                     active_train = self.active_trains[wdf]
-                    active_train.location_col = trainlist.locationCol
-                    active_train.location_row = trainlist.locationRow
+                    old_coordinate = (active_train.location_row, active_train.location_col)
+                    new_coordinate = (trainlist.locationRow, trainlist.locationCol)
+                    active_train.location_row = new_coordinate[0]
+                    active_train.location_col = new_coordinate[1]
                     active_train.delay_text = MultiLang(
                         ja = train.delayMinutes,
                         en = train.delayMinutesEn,
@@ -714,6 +735,13 @@ class KHTracker:
                         active_train.lastpass_station = self.stations[train.lastPassStation]
                     else:
                         active_train.lastpass_station = None
+
+                    # 停車時刻を算出
+                    if not active_train.is_stopping:
+                        active_train.station_arrival_time = None
+                    else:
+                        if old_coordinate != new_coordinate:
+                            active_train.station_arrival_time = datetime.datetime.now(tz=JST)
 
         # 日付更新
         if 0 <= self.train_position_list.fileCreatedTime.hour <= 5:
@@ -741,9 +769,14 @@ class KHTracker:
 
         # startTimeListからデータを登録
         for train in self.starttime_list.TrainInfo:
-            # 臨時列車は当日の便でない可能性があるためスキップ
+            # 臨時列車の場合
             if train.extTrain:
-                continue
+                # ActiveTrainDataがある場合、当日の便で確定するので登録
+                if train.wdfBlockNo in self.trains.keys():
+                    pass
+                # 当日の便でない可能性があるため登録スキップ
+                else:
+                    continue
             
             wdf = train.wdfBlockNo
             if not wdf in self.trains:
