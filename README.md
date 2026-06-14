@@ -43,7 +43,7 @@
 ## インストール
 
 ```bash
-pip install git+https://github.com/dk-butsuri/keihan_tracker.git
+pip install keihan-tracker
 ```
 
 ## 依存パッケージ
