@@ -715,5 +715,5 @@ async def get_data():
         return JSONResponse(status_code=503, content={"error": "Data is initializing, please wait."})
 
 if __name__ == "__main__":
-    webbrowser.open(f"http://localhost:{PORT}")
-    uvicorn.run(app, host="0.0.0.0", port=PORT)
+    webbrowser.open(f"http://127.0.0.1:{PORT}")
+    uvicorn.run(app, host="127.0.0.1", port=PORT)

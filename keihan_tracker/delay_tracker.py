@@ -118,22 +118,26 @@ async def get_yahoo_delay(area:int=6) -> list[DelayLine]:
             title, text = i
             
             pattern = r"（(?P<month>\d{1,2})月(?P<day>\d{1,2})日\s*(?P<hour>\d{1,2})時(?P<minute>\d{1,2})分掲載）"
-            m = re.search(pattern, text) or {}
-
+            m = re.search(pattern, text)
+            
+            if m is None:
+                raise ValueError("掲載時刻のスクレイピングに失敗しました。")
+            
             dt = datetime(
-                year=datetime.now().year,  # 年は別途補完
-                month=int(m["month"]),
-                day=int(m["day"]),
-                hour=int(m["hour"]),
-                minute=int(m["minute"]),
-                tzinfo=JST
+            year=datetime.now().year,  # 年は別途補完
+            month=int(m["month"]),
+            day=int(m["day"]),
+            hour=int(m["hour"]),
+            minute=int(m["minute"]),
+            tzinfo=JST
             )
+
             delays.append(DelayLine(LineName=line, status=title, detail=text, AnnouncedTime=dt))
         return delays
     
 async def get_ekispert_delay(api_key:str, prefs:list[int]=[26,27,28]) -> list[DelayLine]:
     async with httpx.AsyncClient() as web:
-        uri = f"http://api.ekispert.jp/v1/json/operationLine/service/rescuenow/information?key={api_key}"    
+        uri = f"https://api.ekispert.jp/v1/json/operationLine/service/rescuenow/information?key={api_key}"    
         uri += f"&prefectureCode={':'.join(map(str,prefs))}"
         request = await web.get(uri)
         request.raise_for_status()
