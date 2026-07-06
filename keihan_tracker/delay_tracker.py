@@ -124,12 +124,12 @@ async def get_yahoo_delay(area:int=6) -> list[DelayLine]:
                 raise ValueError("掲載時刻のスクレイピングに失敗しました。")
             
             dt = datetime(
-            year=datetime.now().year,  # 年は別途補完
-            month=int(m["month"]),
-            day=int(m["day"]),
-            hour=int(m["hour"]),
-            minute=int(m["minute"]),
-            tzinfo=JST
+                year=datetime.now().year,  # 年は別途補完
+                month=int(m["month"]),
+                day=int(m["day"]),
+                hour=int(m["hour"]),
+                minute=int(m["minute"]),
+                tzinfo=JST
             )
 
             delays.append(DelayLine(LineName=line, status=title, detail=text, AnnouncedTime=dt))
