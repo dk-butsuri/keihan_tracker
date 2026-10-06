@@ -200,6 +200,41 @@ def test_dia_redownloaded_once_when_date_changes(api, fresh_tracker):
         run(fresh_tracker.fetch_pos())
     assert fresh_tracker.date == datetime.date(2026, 10, 7)
     assert api.requests.count(STARTTIME_PATH) == 2
+    # 日付が変わってもダイヤのファイル自体は同じなので 304 になるが、新しい日付で登録し直される
+    assert all(t.date == datetime.date(2026, 10, 7) for t in fresh_tracker.trains.values())
+    assert fresh_tracker.trains[1].start_station is not None
+
+
+def _expire_dia(tracker):
+    """前回のダイヤ取得から1時間以上たったことにする"""
+    tracker.last_regist_dia_datetime -= datetime.timedelta(hours=2)
+
+
+def test_dia_not_modified_keeps_timetable(api, fresh_tracker):
+    """ダイヤが変わっていなければ 304 を受け取り、手元のダイヤをそのまま使う"""
+    run(fresh_tracker.fetch_pos())
+    first = fresh_tracker.starttime_list
+    assert "If-None-Match" not in api.last_headers[STARTTIME_PATH]
+
+    _expire_dia(fresh_tracker)
+    run(fresh_tracker.fetch_pos())
+
+    assert api.requests.count(STARTTIME_PATH) == 2
+    assert "If-None-Match" in api.last_headers[STARTTIME_PATH]
+    assert fresh_tracker.starttime_list is first  # パースし直していない
+    assert all(t.route_stations for t in fresh_tracker.trains.values())
+
+
+def test_dia_modified_is_parsed_again(api, fresh_tracker):
+    run(fresh_tracker.fetch_pos())
+    api.set_json(STARTTIME_PATH, _start_time_list([
+        _train_info(1, [_dia("011", "-"), _dia("041", "21:50")]),
+    ]))
+
+    _expire_dia(fresh_tracker)
+    run(fresh_tracker.fetch_pos())
+
+    assert len(fresh_tracker.starttime_list.TrainInfo) == 1
 
 
 def test_train_disappears_then_inactivated(api, fresh_tracker):

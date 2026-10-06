@@ -22,7 +22,7 @@ from .position_calculation import calc_position
 from pydantic import BaseModel, Field
 import warnings
 from typing import Optional, Literal, Sequence
-from httpx import AsyncClient
+from httpx import AsyncClient, Response
 from pathlib import Path
 import asyncio
 import gzip
@@ -557,6 +557,7 @@ class KHTracker:
         # 取得したレスポンスの保存先（Noneなら保存しない）
         self.snapshot_dir: Optional[Path] = Path(snapshot_dir) if snapshot_dir is not None else None
         self._last_snapshot: dict[str, bytes] = {}                       # ファイル名:前回保存した内容
+        self._etags: dict[str, str] = {}                                 # URL:前回受け取ったETag
         # wdfBlockNo:TrainData
         ## 現在アクティブな列車リスト
         self.trains:dict[int, TrainData|ActiveTrainData] = {}
@@ -630,11 +631,28 @@ class KHTracker:
 
     async def _get(self, url: str) -> str:
         """URLを取得して本文を返す。snapshot_dirが指定されていれば保存もする。"""
-        res = await self.web.get(url)
+        res = await self._request(url, {})
+        return res.text
+
+    async def _get_if_modified(self, url: str) -> Optional[str]:
+        """前回の取得から変わっていれば本文を返し、変わっていなければ（304 Not Modified）Noneを返す。"""
+        etag = self._etags.get(url)
+        res = await self._request(url, {"If-None-Match": etag} if etag else {})
+        if res.status_code == 304:
+            return None
+        return res.text
+
+    async def _request(self, url: str, headers: dict[str, str]) -> Response:
+        res = await self.web.get(url, headers=headers)
+        if res.status_code == 304:
+            return res
         res.raise_for_status()
+        # 次回の条件付き取得のために覚えておく
+        if etag := res.headers.get("ETag"):
+            self._etags[url] = etag
         if self.snapshot_dir is not None:
             await self._save_snapshot(url.rsplit("/", 1)[-1], res.content)
-        return res.text
+        return res
 
     async def _save_snapshot(self, name: str, body: bytes) -> None:
         """前回から内容が変わっていれば snapshot_dir/YYYYMMDD/HHMMSS.mmm_name.gz に保存する。"""
@@ -807,15 +825,20 @@ class KHTracker:
 
     async def regist_dia(self, download:bool):
         "ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
-        if download or self.starttime_list == None:
+        starttime_list = self.starttime_list
+        if download or starttime_list is None:
             self.last_regist_dia_date = self.date
             self.last_regist_dia_datetime = datetime.datetime.now(JST)
-            text = await self._get("https://www.keihan.co.jp/zaisen-up/startTimeList.json")
-            self.starttime_list = startTimeList.model_validate(json.loads(text))
-            del text
+            url = "https://www.keihan.co.jp/zaisen-up/startTimeList.json"
+            if starttime_list is None:
+                starttime_list = startTimeList.model_validate(json.loads(await self._get(url)))
+            # 変わっていなければ本体を受け取らず、手元のダイヤをそのまま使う
+            elif (text := await self._get_if_modified(url)) is not None:
+                starttime_list = startTimeList.model_validate(json.loads(text))
+            self.starttime_list = starttime_list
 
         # startTimeListからデータを登録
-        for train in self.starttime_list.TrainInfo:
+        for train in starttime_list.TrainInfo:
             # 臨時列車の場合
             if train.extTrain:
                 # ActiveTrainDataがある場合、当日の便で確定するので登録
