@@ -31,6 +31,7 @@ import re
 from zoneinfo import ZoneInfo
 
 JST = ZoneInfo("Asia/Tokyo")
+DATE_CHANGE_TIME = 5
 
 class StationData(BaseModel):
     """
@@ -81,7 +82,7 @@ class StationData(BaseModel):
                     continue
                 
                 # この駅が始発駅 or selfが次に停車する駅なら
-                if train.next_stop_station == self:
+                if train.next_stop_station is self:
                     trains.append((train,stop))
                     continue
 
@@ -535,7 +536,7 @@ class KHTracker:
         self.file_list: Optional[FileList] = None
         self.date: datetime.date = datetime.datetime.now(JST).date()   # 日度（始発から終電までを1日とする日付）
         # 深夜帯は-1日することで27時の扱い
-        if 0 <= datetime.datetime.now(JST).hour <= 5:
+        if 0 <= datetime.datetime.now(JST).hour < DATE_CHANGE_TIME:
             self.date = self.date - datetime.timedelta(days=1)
         
         self.web = AsyncClient()
@@ -744,7 +745,7 @@ class KHTracker:
                             active_train.station_arrival_time = datetime.datetime.now(tz=JST)
 
         # 日付更新
-        if 0 <= self.train_position_list.fileCreatedTime.hour <= 5:
+        if 0 <= self.train_position_list.fileCreatedTime.hour < DATE_CHANGE_TIME:
             #深夜帯は-1日することで27時の扱い
             self.date = self.train_position_list.fileCreatedTime.date() - datetime.timedelta(days=1)
         else:
