@@ -23,6 +23,9 @@ from pydantic import BaseModel, Field
 import warnings
 from typing import Optional, Literal, Sequence
 from httpx import AsyncClient
+from pathlib import Path
+import asyncio
+import gzip
 import json
 import xml.etree.ElementTree as ET
 from tabulate import tabulate
@@ -526,8 +529,9 @@ class KHTracker:
     - stations: 全駅の辞書（駅番号:StationData）
     - trains: 全列車の辞書（列車管理番号:TrainData）
     - fetch_pos, fetch_dia でAPIから最新情報取得
+    - snapshot_dir を指定すると、取得したAPIレスポンスをそのまま保存する（デバッグ用）
     """
-    def __init__(self, rate_limit:float = 15) -> None:
+    def __init__(self, rate_limit:float = 15, snapshot_dir: Optional[str | Path] = None) -> None:
         #パースしたJSONデータ（BaseModel）
         self.transfer_guide_info: Optional[TransferGuideInfo] = None # 駅ごとの乗り入れデータ
         self.select_station: Optional[SelectStation] = None          # 路線ごとの駅名データ
@@ -542,6 +546,9 @@ class KHTracker:
         self.web = AsyncClient()
         self.last_fetch_pos_datetime: Optional[datetime.datetime] = None # 最後にfetch_posを行った時刻
         self.rate_limit_interval:float = rate_limit                      # アクセス間隔
+        # 取得したレスポンスの保存先（Noneなら保存しない）
+        self.snapshot_dir: Optional[Path] = Path(snapshot_dir) if snapshot_dir is not None else None
+        self._last_snapshot: dict[str, bytes] = {}                       # ファイル名:前回保存した内容
         # wdfBlockNo:TrainData
         ## 現在アクティブな列車リスト
         self.trains:dict[int, TrainData|ActiveTrainData] = {}
@@ -613,14 +620,41 @@ class KHTracker:
         return trains
 
 
+    async def _get(self, url: str) -> str:
+        """URLを取得して本文を返す。snapshot_dirが指定されていれば保存もする。"""
+        res = await self.web.get(url)
+        res.raise_for_status()
+        if self.snapshot_dir is not None:
+            await self._save_snapshot(url.rsplit("/", 1)[-1], res.content)
+        return res.text
+
+    async def _save_snapshot(self, name: str, body: bytes) -> None:
+        """前回から内容が変わっていれば snapshot_dir/YYYYMMDD/HHMMSS.mmm_name.gz に保存する。"""
+        if self._last_snapshot.get(name) == body:
+            return
+        assert self.snapshot_dir is not None
+        now = datetime.datetime.now(JST)
+        path = self.snapshot_dir / now.strftime("%Y%m%d") / f"{now:%H%M%S}.{now.microsecond // 1000:03}_{name}.gz"
+
+        def write() -> None:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(gzip.compress(body))
+
+        # 保存の失敗で列車情報の取得を止めない
+        try:
+            await asyncio.to_thread(write)
+        except OSError as e:
+            warnings.warn(f"スナップショットの保存に失敗しました: {e}")
+            return
+        self._last_snapshot[name] = body
+
     #動的データを更新
     async def fetch_pos(self):
         "列車走行位置を更新します。1分に1回が適切でしょう。"
         #不変データをダウンロード
         if not self.select_station:
-            res = await self.web.get("https://www.keihan.co.jp/zaisen/select_station.json")
-            res.raise_for_status()
-            self.select_station = SelectStation.model_validate(json.loads(res.text))
+            text = await self._get("https://www.keihan.co.jp/zaisen/select_station.json")
+            self.select_station = SelectStation.model_validate(json.loads(text))
             # select_stationから駅データを登録
             for line,line_detail in self.select_station.root.items():
                 for number, name in line_detail.stations.items():
@@ -636,9 +670,8 @@ class KHTracker:
                                                 station_name = name,
                     )
         if not self.transfer_guide_info:
-            res = await self.web.get("https://www.keihan.co.jp/zaisen/transferGuideInfo.json")
-            res.raise_for_status()
-            self.transfer_guide_info = TransferGuideInfo.model_validate(json.loads(res.text))
+            text = await self._get("https://www.keihan.co.jp/zaisen/transferGuideInfo.json")
+            self.transfer_guide_info = TransferGuideInfo.model_validate(json.loads(text))
             # transferGuideInfoから乗り換え情報を登録
             for number, transfers in self.transfer_guide_info.root.items():
                 number = int(number[2:])
@@ -654,10 +687,9 @@ class KHTracker:
         
         # 列車位置を取得
         self.last_fetch_pos_datetime = now
-        res = await self.web.get("https://www.keihan.co.jp/zaisen-up/trainPositionList.json")
-        res.raise_for_status()
-        self.train_position_list = trainPositionList.model_validate(json.loads(res.text))
-        del res
+        text = await self._get("https://www.keihan.co.jp/zaisen-up/trainPositionList.json")
+        self.train_position_list = trainPositionList.model_validate(json.loads(text))
+        del text
 
         # 日付更新
         if 0 <= self.train_position_list.fileCreatedTime.hour < DATE_CHANGE_TIME:
@@ -763,10 +795,9 @@ class KHTracker:
     async def regist_dia(self, download:bool):
         "ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
         if download or self.starttime_list == None:
-            res = await self.web.get("https://www.keihan.co.jp/zaisen-up/startTimeList.json")
-            res.raise_for_status()
-            self.starttime_list = startTimeList.model_validate(json.loads(res.text))
-            del res
+            text = await self._get("https://www.keihan.co.jp/zaisen-up/startTimeList.json")
+            self.starttime_list = startTimeList.model_validate(json.loads(text))
+            del text
 
         # startTimeListからデータを登録
         for train in self.starttime_list.TrainInfo:
@@ -851,9 +882,8 @@ class KHTracker:
 
     async def fetch_filelist(self):
         """【未実装】FileList.xmlを取得する。"""
-        res = await self.web.get("https://www.keihan.co.jp/tinfo/05-flist/FileList.xml")
-        res.raise_for_status()
-        root = ET.fromstring(res.text)
+        text = await self._get("https://www.keihan.co.jp/tinfo/05-flist/FileList.xml")
+        root = ET.fromstring(text)
 
         # 時刻設定
         t = root.findtext("time")
