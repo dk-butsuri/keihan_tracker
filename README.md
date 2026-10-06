@@ -265,9 +265,11 @@ if __name__ == "__main__":
 ライブラリのルートとなる管理クラス。
 
 ```python
-KHTracker(rate_limit: float = 15)
+KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 ```
 `rate_limit`: `fetch_pos()` の最小呼び出し間隔（秒）。デフォルトは15秒。これよりも高頻度で実行すると、取得処理がスキップされる。
+
+`snapshot_dir`: デバッグ用。指定すると、APIから取得したレスポンスをそのまま `snapshot_dir/YYYYMMDD/HHMMSS.mmm_ファイル名.gz` に保存する。前回と内容が同じ場合は保存しない。パースに失敗したレスポンスも保存されるため、表示がおかしかったときに原因のデータを後から確認できる。古いファイルは自動では削除されないので、必要に応じて手動で整理すること。
 
 *   `stations: dict[int, StationData]`: 駅データ。キーは駅番号の整数値（KH01なら1）。
 *   `trains: dict[int, TrainData | ActiveTrainData]`: 全列車データ（走行中・予定・終了含む）。キーは内部管理番号(WDF)。
