@@ -1,0 +1,144 @@
+{
+    "KH66":{
+        "train":{
+            "ja":["JR学研都市線"],
+            "en":["JR Gakkentoshi Line"],
+            "cn":["JR学研都市线"],
+            "tw":["JR學研都市線"],
+            "kr":["JR 갓켄토시선"]
+        }
+    },
+    "KH53":{
+        "subway":{
+            "ja":["Osaka Metro 四つ橋線"],
+            "en":["Osaka Metro Yotsubashi Line"],
+            "cn":["Osaka Metro 四桥线"],
+            "tw":["Osaka Metro四桥线（Osaka Metro 四橋線）"],
+            "kr":["오사카메트로 요쓰바시선"]
+        }
+    },
+    "KH52":{
+        "subway":{
+            "ja":["Osaka Metro 御堂筋線"],
+            "en":["Osaka Metro Midosuji Line"],
+            "cn":["Osaka Metro 御堂筋线"],
+            "tw":["Osaka Metro御堂筋线（Osaka Metro 御堂筋線）"],
+            "kr":["오사카메트로 미도스지선"]
+        }
+    },
+    "KH51":{
+        "subway":{
+            "ja":["Osaka Metro 堺筋線"],
+            "en":["Osaka Metro Sakaisuji Line"],
+            "cn":["Osaka Metro 堺筋线"],
+            "tw":["Osaka Metro堺筋线（Osaka Metro 堺筋線）"],
+            "kr":["오사카메트로 사카이스지선"]
+        }
+    },
+    "KH42":{
+        "train":{
+            "ja":["叡山電車 叡山本線", "叡山電車 鞍馬線"],
+            "en":["Eizan Railway Eizan Line", "Eizan Railway Kurama Line"],
+            "cn":["睿山电车 睿山本线", "睿山电车 鞍马线"],
+            "tw":["叡山電車 叡山本線", "叡山電車 鞍馬線"],
+            "kr":["에이잔 전철 에이잔 본선", "에이잔 전철 구라마 선"]
+        }
+    },
+    "KH40":{
+        "train":{
+            "ja":["地下鉄東西線（京津線方面）"],
+            "en":["Subway Tozai Line (to the Keihan Keishin Line)"],
+            "cn":["地铁东西线（开往京津线方向）"],
+            "tw":["地下鐵東西線（開往京津線方向）"],
+            "kr":["지하철 도자이선(게이신선)"]
+        }
+    },
+    "KH36":{
+        "train":{
+            "ja":["JR奈良線"],
+            "en":["JR Nara Line"],
+            "cn":["JR奈良线"],
+            "tw":["JR奈良線"],
+            "kr":["JR 나라선"]
+        }
+    },
+    "KH30":{
+        "train":{
+            "ja":["近鉄京都線"],
+            "en":["Kintetsu Kyoto Line"],
+            "cn":["近铁京都线"],
+            "tw":["近鐵京都線"],
+            "kr":["긴테쓰 교토선"]
+        }
+    },
+    "KH26":{
+        "train":{
+            "ja":["石清水八幡宮参道ケーブル"],
+            "en":["Iwashimizu-hachimangu-sando-cable"],
+            "cn":["石清水八幡宫参道缆车"],
+            "tw":["石清水八幡宮參道纜車"],
+            "kr":["이와시미즈하치만구 산도 케이블"]
+        }
+    },
+    "KH13":{
+        "monorail":{
+            "ja":["大阪モノレール"],
+            "en":["Osaka Monorail"],
+            "cn":["大阪单轨电车"],
+            "tw":["大阪單軌電車"],
+            "kr":["오사카 모노레일"]
+        }
+    },
+    "KH06":{
+        "subway":{
+            "ja":["Osaka Metro 今里筋線"],
+            "en":["Osaka Metro Imazatosuji Line"],
+            "cn":["Osaka Metro 今里筋线"],
+            "tw":["Osaka Metro今里筋线（Osaka Metro 今里筋線）"],
+            "kr":["오사카메트로 이마자토스지선"]
+        }
+    },
+    "KH04":{
+        "train":{
+            "ja":["JR大阪環状線", "JR東西線", "JR学研都市線"],
+            "en":["JR Osaka Loop Line", "JR Tozai Line", "JR Gakkentoshi Line"],
+            "cn":["JR大阪环状线", "JR东西线", "JR学研都市线"],
+            "tw":["JR大阪環狀線", "JR東西線", "JR學研都市線"],
+            "kr":["JR 오사카 간조선 ", "JR 도자이선", "JR 갓켄토시선"]
+        },
+        "subway":{
+            "ja":["Osaka Metro 長堀鶴見緑地線"],
+            "en":["Osaka Metro Nagahori Tsurumi-ryokuchi Line"],
+            "cn":["Osaka Metro 长堀鹤见绿地线"],
+            "tw":["Osaka Metro长堀鹤见绿地线（Osaka Metro 長堀鶴見綠地線）"],
+            "kr":["오사카메트로 나가호리 쓰루미료쿠치선"]
+        }
+    },
+    "KH03":{
+        "subway":{
+            "ja":["Osaka Metro 谷町線"],
+            "en":["Osaka Metro Tanimachi Line"],
+            "cn":["Osaka Metro 谷町线"],
+            "tw":["Osaka Metro谷町线（Osaka Metro 谷町線）"],
+            "kr":["오사카메트로 다니마치선"]
+        }
+    },
+    "KH02":{
+        "subway":{
+            "ja":["Osaka Metro 堺筋線"],
+            "en":["Osaka Metro Sakaisuji Line"],
+            "cn":["Osaka Metro 堺筋线"],
+            "tw":["Osaka Metro堺筋线（Osaka Metro 堺筋線）"],
+            "kr":["오사카메트로 사카이스지선"]
+        }
+    },
+    "KH01":{
+        "subway":{
+            "ja":["Osaka Metro 御堂筋線"],
+            "en":["Osaka Metro Midosuji Line"],
+            "cn":["Osaka Metro 御堂筋线"],
+            "tw":["Osaka Metro御堂筋线（Osaka Metro 御堂筋線）"],
+            "kr":["오사카메트로 미도스지선"]
+        }
+    }
+}
