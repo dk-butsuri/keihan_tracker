@@ -659,8 +659,15 @@ class KHTracker:
         self.train_position_list = trainPositionList.model_validate(json.loads(res.text))
         del res
 
-        old_wdfs: list[int] = []
+        # 日付更新
+        if 0 <= self.train_position_list.fileCreatedTime.hour < DATE_CHANGE_TIME:
+            #深夜帯は-1日することで27時の扱い
+            self.date = self.train_position_list.fileCreatedTime.date() - datetime.timedelta(days=1)
+        else:
+            self.date = self.train_position_list.fileCreatedTime.date()
+
         # 前日の列車があれば削除
+        old_wdfs: list[int] = []
         for wdf, train in self.trains.items():
             if train.date != self.date:
                 old_wdfs.append(wdf)
@@ -744,13 +751,6 @@ class KHTracker:
                         if old_coordinate != new_coordinate:
                             active_train.station_arrival_time = datetime.datetime.now(tz=JST)
 
-        # 日付更新
-        if 0 <= self.train_position_list.fileCreatedTime.hour < DATE_CHANGE_TIME:
-            #深夜帯は-1日することで27時の扱い
-            self.date = self.train_position_list.fileCreatedTime.date() - datetime.timedelta(days=1)
-        else:
-            self.date = self.train_position_list.fileCreatedTime.date()
-        
         #ダイア情報を登録
         if self.starttime_list:
             if (datetime.datetime.now(JST)-self.starttime_list.fileCreatedTime) > datetime.timedelta(hours=1):
