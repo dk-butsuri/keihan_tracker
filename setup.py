@@ -7,7 +7,7 @@ VERSION = "2.2.2"
 PYTHON_REQUIRES = ">=3.10"
 URL = "https://github.com/dk-butsuri/keihan_tracker"
 INSTALL_REQUIRES = [
-    "pydantic",
+    "pydantic >= 2",
     "httpx",
     "tabulate",
     "beautifulsoup4",
