@@ -188,6 +188,20 @@ def test_dia_not_redownloaded_within_an_hour(api, fresh_tracker):
     assert api.requests.count(STARTTIME_PATH) == 1
 
 
+def test_dia_redownloaded_once_when_date_changes(api, fresh_tracker):
+    """深夜帯に毎回取り直さず、5時に日付が変わったときだけ1回取り直す"""
+    for created in ["20261007040000", "20261007045900"]:
+        api.set_json(POSITION_PATH, make_position_list(created))
+        run(fresh_tracker.fetch_pos())
+    assert api.requests.count(STARTTIME_PATH) == 1
+
+    for created in ["20261007050000", "20261007050100"]:
+        api.set_json(POSITION_PATH, make_position_list(created))
+        run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.date == datetime.date(2026, 10, 7)
+    assert api.requests.count(STARTTIME_PATH) == 2
+
+
 def test_train_disappears_then_inactivated(api, fresh_tracker):
     run(fresh_tracker.fetch_pos())
     liner = fresh_tracker.trains[1099]
