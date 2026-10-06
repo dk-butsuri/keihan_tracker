@@ -118,6 +118,14 @@ class StationData(BaseModel):
 
     def __str__(self):
         return self.station_name.ja
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, StationData):
+            return NotImplemented
+        return self.station_number == other.station_number
+
+    def __hash__(self) -> int:
+        return hash(self.station_number)
     
     # masterの型を許可する
     model_config = {"arbitrary_types_allowed": True}
