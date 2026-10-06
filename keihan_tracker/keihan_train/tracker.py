@@ -374,8 +374,6 @@ class TrainData(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-# ActiveTrainDataによる属性上書きの警告を無効化
-warnings.filterwarnings("ignore", category=UserWarning, module="pydantic")
 class ActiveTrainData(TrainData):
     """
     現在アクティブな列車情報を表すモデル。
