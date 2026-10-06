@@ -152,6 +152,13 @@ def test_rate_limit_skips_request(api):
     assert api.requests.count(POSITION_PATH) == 1
 
 
+def test_dia_not_redownloaded_within_an_hour(api, fresh_tracker):
+    """ダイヤのファイルが古くても、取得から1時間以内は取り直さない"""
+    run(fresh_tracker.fetch_pos())
+    run(fresh_tracker.fetch_pos())
+    assert api.requests.count(STARTTIME_PATH) == 1
+
+
 def test_train_disappears_then_inactivated(api, fresh_tracker):
     run(fresh_tracker.fetch_pos())
     liner = fresh_tracker.trains[1099]
