@@ -545,6 +545,7 @@ class KHTracker:
         
         self.web = AsyncClient()
         self.last_fetch_pos_datetime: Optional[datetime.datetime] = None # 最後にfetch_posを行った時刻
+        self.last_regist_dia_datetime: Optional[datetime.datetime] = None # 最後にregist_diaでfetchした時刻
         self.rate_limit_interval:float = rate_limit                      # アクセス間隔
         # 取得したレスポンスの保存先（Noneなら保存しない）
         self.snapshot_dir: Optional[Path] = Path(snapshot_dir) if snapshot_dir is not None else None
@@ -785,7 +786,7 @@ class KHTracker:
 
         #ダイア情報を登録
         if self.starttime_list:
-            if (datetime.datetime.now(JST)-self.starttime_list.fileCreatedTime) > datetime.timedelta(hours=1):
+            if self.last_regist_dia_datetime is None or (datetime.datetime.now(JST) - self.last_regist_dia_datetime) > datetime.timedelta(hours=1):
                 await self.regist_dia(True)
             else:
                 await self.regist_dia(False)
@@ -795,6 +796,7 @@ class KHTracker:
     async def regist_dia(self, download:bool):
         "ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
         if download or self.starttime_list == None:
+            self.last_regist_dia_datetime = datetime.datetime.now(JST)
             text = await self._get("https://www.keihan.co.jp/zaisen-up/startTimeList.json")
             self.starttime_list = startTimeList.model_validate(json.loads(text))
             del text
