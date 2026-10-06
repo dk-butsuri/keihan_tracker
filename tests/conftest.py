@@ -8,6 +8,7 @@ httpx.MockTransport で返すことで、ネットワークに接続せずに KH
 import asyncio
 import datetime
 import gzip
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, Optional
@@ -62,16 +63,23 @@ class MockKeihanAPI:
             path: load_fixture_bytes(name) for path, name in URL_TO_FIXTURE.items()
         }
         self.requests: list[str] = []
+        self.last_headers: dict[str, httpx.Headers] = {}  # パス:最後に受け取ったリクエストヘッダー
 
     def set_json(self, path: str, data: Any) -> None:
         self.responses[path] = json.dumps(data, ensure_ascii=False).encode("utf-8")
 
     def handler(self, request: httpx.Request) -> httpx.Response:
-        self.requests.append(request.url.path)
-        body = self.responses.get(request.url.path)
+        path = request.url.path
+        self.requests.append(path)
+        self.last_headers[path] = request.headers
+        body = self.responses.get(path)
         if body is None:
             return httpx.Response(404)
-        return httpx.Response(200, content=body)
+        # 本物のサーバーと同じく、ETagが一致すれば 304 Not Modified を返す
+        etag = f'"{hashlib.sha1(body).hexdigest()}"'
+        if request.headers.get("If-None-Match") == etag:
+            return httpx.Response(304, headers={"ETag": etag})
+        return httpx.Response(200, content=body, headers={"ETag": etag})
 
 
 def make_tracker(api: MockKeihanAPI) -> KHTracker:
