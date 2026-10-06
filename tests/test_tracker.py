@@ -3,7 +3,7 @@ import datetime
 
 import pytest
 
-from keihan_tracker import ActiveTrainData, TrainData, TrainType
+from keihan_tracker import ActiveTrainData, StationData, TrainData, TrainType
 from keihan_tracker.keihan_train.tracker import JST
 
 from conftest import load_fixture, make_position_list, make_tracker, run
@@ -54,6 +54,35 @@ def test_stations_registered(tracker):
     assert tracker.stations[1].station_name.ja == "淀屋橋"
     assert tracker.stations[42].station_name.ja == "出町柳"
     assert tracker.stations[21].line == {"京阪本線・鴨東線", "交野線"}
+
+
+def test_station_equality_by_number(tracker):
+    neyagawa = tracker.stations[17]
+    # 駅番号が同じなら、別のオブジェクトでも等しい
+    copy = StationData(
+        master=tracker,
+        line={"京阪本線・鴨東線"},
+        station_number=17,
+        station_name=neyagawa.station_name,
+    )
+    assert neyagawa == copy
+    assert neyagawa != tracker.stations[18]
+    # 駅以外と比べても例外にならない
+    assert neyagawa != 17
+    assert neyagawa != "寝屋川市"
+
+
+def test_station_hashable(tracker):
+    neyagawa = tracker.stations[17]
+    copy = StationData(
+        master=tracker,
+        line=set(neyagawa.line),
+        station_number=17,
+        station_name=neyagawa.station_name,
+    )
+    assert len({neyagawa, copy, tracker.stations[18]}) == 2
+    assert {neyagawa: "ok"}[copy] == "ok"
+    assert len(set(tracker.stations.values())) == len(tracker.stations)
 
 
 def test_transfer_info_registered(tracker):
