@@ -36,6 +36,13 @@ from zoneinfo import ZoneInfo
 JST = ZoneInfo("Asia/Tokyo")
 DATE_CHANGE_TIME = 5
 
+
+class DiaNotFoundError(ValueError):
+    """
+    列車のダイヤ（startTimeList）が無いため、ダイヤから求める情報が分からないことを表す例外。
+    運休・運転整理などで、位置情報にはあるがダイヤには無い列車が走ることがある。
+    """
+
 class StationData(BaseModel):
     """
     駅情報を表すモデル。
@@ -163,9 +170,20 @@ class TrainData(BaseModel):
     # 以下はActiveだった時のデータを保持する変数
     actual_train_type: Optional[TrainType] = None
     actual_direction: Optional[Literal["up","down"]] = None
+    actual_destination: Optional[StationData] = None
+    actual_line: Optional[LineLiteral] = None
+
+    @property
+    def has_dia(self) -> bool:
+        """ダイヤ（停車駅・時刻）があるか。運休・運転整理などで、ダイヤに無い列車が走ることがある。"""
+        return len(self.route_stations) > 0
 
     @property
     def line(self) -> LineLiteral:
+        # アクティブ時のデータが残っているならそのまま返す
+        if self.actual_line is not None:
+            return self.actual_line
+
         stop_stations = [stop.station for stop in self.stop_stations]
         if self.master.stations[54] in stop_stations:
             return "中之島線"
@@ -217,6 +235,8 @@ class TrainData(BaseModel):
         # アクティブ時のデータが残っているならそのまま返す
         if self.actual_train_type is not None:
             return self.actual_train_type
+        if not self.has_dia:
+            raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] ダイヤに無い列車のため、種別を推定できません。")
 
         stop_stations_list = [stop.station for stop in self.stop_stations]
 
@@ -316,6 +336,8 @@ class TrainData(BaseModel):
     # 始発駅（is_startがTrueの停車駅のうち1番目を返す）
     @property
     def start_station(self) -> StationData:
+        if not self.has_dia:
+            raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] ダイヤに無い列車のため、始発駅が分かりません。")
         start_stations = [station for station in self.route_stations if station.is_start]
         if len(start_stations) != 1:
             raise ValueError(f"[WDF{self.wdfBlockNo}] 始発駅が{len(start_stations)}個登録されています。これはバグです。\n({start_stations})")
@@ -324,6 +346,11 @@ class TrainData(BaseModel):
 
     @property
     def destination(self) -> StationData:
+        # アクティブ時のデータが残っているならそのまま返す
+        if self.actual_destination is not None:
+            return self.actual_destination
+        if not self.has_dia:
+            raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] ダイヤに無い列車のため、行先が分かりません。")
         stop_stationdata = [station for station in self.route_stations if station.is_final]
         if len(stop_stationdata) != 1:
             raise ValueError(f"[WDF{self.wdfBlockNo}] 終着駅が{len(stop_stationdata)}個登録されています。これはバグです。\n({stop_stationdata})")
@@ -361,7 +388,8 @@ class TrainData(BaseModel):
         # 整形して文字列化
 
     def __str__(self) -> str:
-        text = f'【非アクティブ】{self.train_type.value} {self.destination or "不明"} 行き（{self.start_station} 発）\n'
+        start = self.start_station if self.has_dia else "不明"
+        text = f'【非アクティブ】{self.train_type.value} {self.destination or "不明"} 行き（{start} 発）\n'
         text += f'{self.train_formation}編成 {"プレミアムカー付き /" if self.has_premiumcar else ""}\n'
 
         header = ["到着時刻","停車駅","ホーム番線"]
@@ -423,7 +451,7 @@ class ActiveTrainData(TrainData):
     @property
     def is_at_start_station(self) -> bool:
         """始発駅に停車中かどうか"""
-        return self.is_stopping and self.next_stop_station == self.start_station
+        return self.has_dia and self.is_stopping and self.next_stop_station == self.start_station
 
     @property
     def stopping_time(self) -> datetime.timedelta:
@@ -523,6 +551,8 @@ class ActiveTrainData(TrainData):
             wdfBlockNo=self.wdfBlockNo,
             actual_train_type=self.train_type,
             actual_direction=self.direction,
+            actual_destination=self.destination,
+            actual_line=self.line,
             has_premiumcar=self.has_premiumcar,
             train_formation=self.train_formation,
             route_stations=self.route_stations,

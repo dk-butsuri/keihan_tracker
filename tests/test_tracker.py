@@ -3,7 +3,7 @@ import datetime
 
 import pytest
 
-from keihan_tracker import ActiveTrainData, StationData, TrainData, TrainType
+from keihan_tracker import ActiveTrainData, DiaNotFoundError, StationData, TrainData, TrainType
 from keihan_tracker.keihan_train.tracker import JST
 
 from conftest import load_fixture, make_position_list, make_tracker, run
@@ -359,3 +359,79 @@ def test_regist_dia_skips_ext_train_unless_active(api, fresh_tracker):
 
     assert 1 not in fresh_tracker.trains
     assert 2 in fresh_tracker.trains
+
+
+
+# ---------------------------------------------------------------- ダイヤに無い列車
+
+NO_DIA_WDF = 1194  # 宇治線 宇治行き普通、観月橋に停車中
+
+
+@pytest.fixture
+def no_dia_tracker(api, fresh_tracker):
+    """運休・運転整理などで、位置情報にはあるがダイヤに無い列車がいる状態"""
+    data = load_fixture("startTimeList.json")
+    data["TrainInfo"] = [t for t in data["TrainInfo"] if int(t["wdfBlockNo"]) != NO_DIA_WDF]
+    api.set_json(STARTTIME_PATH, data)
+    run(fresh_tracker.fetch_pos())
+    return fresh_tracker
+
+
+def test_active_train_without_dia(no_dia_tracker):
+    tracker = no_dia_tracker
+    train = tracker.trains[NO_DIA_WDF]
+    assert isinstance(train, ActiveTrainData)
+    assert not train.has_dia
+    assert tracker.trains[1192].has_dia
+
+    # ダイヤから求める情報は分からない
+    with pytest.raises(DiaNotFoundError):
+        train.start_station
+    assert issubclass(DiaNotFoundError, ValueError)
+    assert train.stop_stations == []
+    assert train.next_stop_station is None
+    assert train.is_stopping
+    assert not train.is_at_start_station
+
+    # 位置情報から分かる情報は使える
+    assert train.train_type == TrainType.LOCAL
+    assert train.destination is tracker.stations[77]
+    assert train.direction == "down"
+    assert train.line == "宇治線"
+    assert not train.is_special
+    assert train.next_station is tracker.stations[71]
+    str(train)
+
+    # 駅から列車を探しても落ちない（ダイヤに無い列車は出てこない）
+    kangetsukyo = tracker.stations[71]
+    assert train not in kangetsukyo.arriving_trains
+    assert train not in [t for t, _ in kangetsukyo.upcoming_trains]
+    assert train in tracker.find_trains(destination=tracker.stations[77])
+
+
+def test_inactivated_train_without_dia(api, no_dia_tracker):
+    """ダイヤに無い列車が運行を終えても、アクティブ時の情報が残る"""
+    tracker = no_dia_tracker
+    api.set_json(POSITION_PATH, make_position_list("20261006213000"))
+    run(tracker.fetch_pos())
+
+    train = tracker.trains[NO_DIA_WDF]
+    assert type(train) is TrainData
+    assert not train.has_dia
+    assert train.status == "completed"
+    assert train.train_type == TrainType.LOCAL
+    assert train.destination is tracker.stations[77]
+    assert train.direction == "down"
+    assert train.line == "宇治線"
+    with pytest.raises(DiaNotFoundError):
+        train.start_station
+    assert "不明 発" in str(train)
+    assert train in tracker.find_trains(destination=tracker.stations[77])
+
+
+def test_train_data_without_dia_or_actual_data(tracker):
+    """ダイヤもアクティブ時の情報も無ければ、推定する情報は DiaNotFoundError になる"""
+    train = TrainData(master=tracker, wdfBlockNo=1, date=FIXTURE_DATE, has_premiumcar=None, train_formation=None)
+    for name in ["train_type", "direction", "destination", "start_station"]:
+        with pytest.raises(DiaNotFoundError):
+            getattr(train, name)
