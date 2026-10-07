@@ -252,10 +252,16 @@ if __name__ == "__main__":
     *   `tracker.trains` には両方が混在しています。区別するには `isinstance(train, ActiveTrainData)` を使用してください。
     *   **臨時列車 (`is_special=True`) は必ず `ActiveTrainData`** です。走行が確認された時点で `ActiveTrainData` として登録され、同時にダイヤ情報も登録されます。走行が確認されるまではダイヤ登録をスキップするため、当日運転しない臨時列車のゴースト登録を防いでいます。（2026GWで運行された臨時列車でゴースト現象を確認済み）
 
-4.  **駅番号は整数 (int)**
+4.  **ダイヤに無い列車が走ることがある**
+    *   運休・運転整理（2026年4月28日の停電によるダイヤ乱れで確認）や一部の臨時列車では、位置情報にはあるがダイヤ（startTimeList）には無い列車が `ActiveTrainData` として登録されます。`has_dia` で判別できます。
+    *   種別・行先・方向・`is_special` は位置情報から取得するため正確ですが、停車駅・時刻・始発駅・プレミアムカー・編成番号は分かりません。`start_station` は `DiaNotFoundError`（`ValueError` のサブクラス）を送出し、`stop_stations` は空、`next_stop_station` は `None` になります。
+    *   ダイヤに無い列車は、`StationData.arriving_trains` / `upcoming_trains` / `trains` には含まれません。
+    *   ダイヤが乱れている間は、ダイヤに載っている列車でも `stop_stations` や `next_stop_station` が実際の運行と異なる場合があります。
+
+5.  **駅番号は整数 (int)**
     *   駅番号（ナンバリング）は `KH01` のような文字列ではなく、数字部分の整数 `1` として扱います。辞書のキーも整数です。
 
-5.  **時刻は日本標準時 (JST)**
+6.  **時刻は日本標準時 (JST)**
     *   ライブラリ内で扱われる `datetime` オブジェクトには、すべてタイムゾーン情報（`Asia/Tokyo`）が付与されています。
     *   現在時刻と比較する場合は、`datetime.now()` ではなく `datetime.now(ZoneInfo("Asia/Tokyo"))` などと比較しないとエラーになります。
 
@@ -323,7 +329,8 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `wdfBlockNo: int`: 列車管理番号
 *   `date: datetime.date`: この列車が属する営業日。0〜5時の深夜帯は前日扱いとハードコーディングされています。
 *   `destination: StationData`: 行先駅
-*   `start_station: StationData`: 始発駅
+*   `start_station: StationData`: 始発駅。ダイヤに無い列車では `DiaNotFoundError` を送出します
+*   `has_dia: bool`: ダイヤ（停車駅・時刻）があるか
 *   `stop_stations: list[StopStationData]`: 全停車駅のリスト
 *   `route_stations: list[StopStationData]`: 停車・通過駅のリスト（一部の通過駅のみが含まれる）
 *   `has_premiumcar: Optional[bool]`: プレミアムカーがあるか
@@ -335,7 +342,7 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `status: Literal["active","scheduled","completed"]`: 運行状態。**`"active"` のみ正確**。`"scheduled"` / `"completed"` はダイヤ上の予定時刻から推定するため精度は保証されません。`find_trains(status="active")` などと組み合わせて使います。
 *   `is_completed: bool`: 運行完了フラグ。`status` 同様、精度は保証されません。
 
-なお、`ActiveTrainData` が運行終了後に `TrainData` に降格した際、`direction` と `train_type` は引き継がれます。
+なお、`ActiveTrainData` が運行終了後に `TrainData` に降格した際、`direction`・`train_type`・`destination`・`line` は引き継がれます。
 
 #### ActiveTrainData (継承クラス)
 現在走行中の列車です。`TrainData` に加え、以下の**リアルタイム情報**を持ちます。
@@ -348,7 +355,7 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `cars: int`: 車両数
 *   `location_col`, `location_row`: zaisen上のグリッド座標
 *   `is_special: bool`: 臨時列車かどうか
-*   `is_at_start_station: bool`: 現在、始発駅に停車中かどうか
+*   `is_at_start_station: bool`: 現在、始発駅に停車中かどうか（ダイヤに無い列車では常に `False`）
 *   `stopping_time: datetime.timedelta`: 現在の駅に停車している時間。走行中は `timedelta(0)` を返す
 *   `lastpass_station: Optional[StationData]`: ⚠️ **使用非推奨**。基本的に停車中 or 次に停車する駅。公式zaisenページの列車詳細における停車時刻表示の開始基準として使われる内部値であり、「最後に通過した駅」として厳密に管理されているわけではありません。例えば萱島～京橋を走る各駅列車でも常に萱島が設定されるなど、路線・区間によって信頼性の低い値が返ります。
 
@@ -362,6 +369,8 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `arriving_trains: list[ActiveTrainData]`: 停車中、もしくは**次に**停車する走行中列車のリスト
 *   `upcoming_trains: list[tuple[TrainData | ActiveTrainData, StopStationData]]`: 停車中、もしくは**今後**停車する全列車とその到着時刻のリスト（時刻順）。
 *   `trains: list[tuple[TrainData | ActiveTrainData, StopStationData]]`: **過去・現在・未来すべて**の停車列車リスト（時刻順）。`upcoming_trains` が「これから停車する列車」のみを返すのに対し、こちらはすでに通過済みの列車も含みます。発車標ではなく運行履歴や全停車情報が必要な場合に使用します。
+
+いずれもダイヤの停車駅から探すため、ダイヤに無い列車（`has_dia` が `False`）は含まれません。
 
 ### StopStationData
 列車の停車・通過駅を表すクラス。train.stop_stations や station.upcoming_trains の戻り値に含まれます。
