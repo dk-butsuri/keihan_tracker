@@ -180,8 +180,8 @@ class trainPositionList(BaseModel):
 
 # 1.
 class diaStationInfoObject(BaseModel):
-    stationNumber:  str = Field(description="駅ナンバリング2桁+ホーム番号1桁 ")
-    stationDepTime: str = Field(description="00:00の形式。深夜は25時などで表す。出発駅の場合は-（ハイフン）、不明な場合は99:99。")
+    stationNumber:  str = Field(description="駅ナンバリング2桁+区分1桁。区分は0:通過、1・2:停車（1は時刻が載る主要駅（採時駅？）と思われる）。99は寝屋川信号場")
+    stationDepTime: str = Field(description="00:00の形式。深夜は25時などで表す。出発駅の場合は-（ハイフン）。通過駅と、停車するが時刻不明の駅（ダイヤ乱れ時の運転整理など）は99:99。")
     stationNameJp:  str
     stationNameEn:  str
     stationNameZhTw:str

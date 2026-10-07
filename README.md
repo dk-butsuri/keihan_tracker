@@ -256,7 +256,7 @@ if __name__ == "__main__":
     *   運休・運転整理（2026年4月28日の停電によるダイヤ乱れで確認）や一部の臨時列車では、位置情報にはあるがダイヤ（startTimeList）には無い列車が `ActiveTrainData` として登録されます。`has_dia` で判別できます。
     *   種別・行先・方向・`is_special` は位置情報から取得するため正確ですが、停車駅・時刻・始発駅・プレミアムカー・編成番号は分かりません。`start_station` は `DiaNotFoundError`（`ValueError` のサブクラス）を送出し、`stop_stations` は空、`next_stop_station` は `None` になります。
     *   ダイヤに無い列車は、`StationData.arriving_trains` / `upcoming_trains` / `trains` には含まれません。
-    *   ダイヤが乱れている間は、ダイヤに載っている列車でも `stop_stations` や `next_stop_station` が実際の運行と異なる場合があります。
+    *   ダイヤが乱れている間は、ダイヤに載っている列車でも `stop_stations` や `next_stop_station` が実際の運行と異なる場合があります。また、停車駅の時刻が不明（`None`）になることがあります。時刻不明の停車は、`StationData.trains` / `upcoming_trains` では時刻順の最後に並びます。
 
 5.  **駅番号は整数 (int)**
     *   駅番号（ナンバリング）は `KH01` のような文字列ではなく、数字部分の整数 `1` として扱います。辞書のキーも整数です。
@@ -331,8 +331,8 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `destination: StationData`: 行先駅
 *   `start_station: StationData`: 始発駅。ダイヤに無い列車では `DiaNotFoundError` を送出します
 *   `has_dia: bool`: ダイヤ（停車駅・時刻）があるか
-*   `stop_stations: list[StopStationData]`: 全停車駅のリスト
-*   `route_stations: list[StopStationData]`: 停車・通過駅のリスト（一部の通過駅のみが含まれる）
+*   `stop_stations: list[StopStationData]`: 全停車駅のリスト（走行順）
+*   `route_stations: list[StopStationData]`: 停車・通過駅のリスト（走行順。一部の通過駅のみが含まれる）
 *   `has_premiumcar: Optional[bool]`: プレミアムカーがあるか
 *   `delay_minutes: int` 遅延分数（`TrainData` では常に0）
 *   `train_formation: Optional[int]` 列車編成（3003など）
@@ -375,7 +375,7 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 ### StopStationData
 列車の停車・通過駅を表すクラス。train.stop_stations や station.upcoming_trains の戻り値に含まれます。
    * station: StationData: 駅
-   * time: Optional[datetime]: 到着/出発時刻（始発・終着・通過駅などでNoneの場合あり）
+   * time: Optional[datetime]: 到着/出発時刻（始発駅・通過駅ではNone。ダイヤ乱れ時の運転整理などで、停車駅でも時刻不明のNoneになる場合あり）
    * is_stop: bool: 停車するかどうか（通過駅ならFalse）
    * is_start: bool: この駅が始発駅かどうか
    * is_final: bool: この駅が終着駅かどうか

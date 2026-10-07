@@ -73,14 +73,15 @@ class StationData(BaseModel):
                 if stop.station == self and stop.is_stop:
                     trains.append((train,stop))
 
-        trains.sort(key = lambda t:t[1].time or datetime.datetime.min.replace(tzinfo=JST))
+        # 時刻不明の停車は後ろに回す
+        trains.sort(key = lambda t:t[1].time or datetime.datetime.max.replace(tzinfo=JST))
         return trains
     
     @property
     def upcoming_trains(self) -> list[tuple["TrainData|ActiveTrainData","StopStationData"]]:
         """
         この駅に 今後停車する or 停車中 のすべての列車を返す。
-        列車のnext_stop_stationの停車時刻とこの駅に停車する時刻を比較する。
+        走行中の列車は、停車駅の並び（走行順）で next_stop_station 以降にこの駅があるかで判定する。
         """
         trains:list[tuple[(TrainData|ActiveTrainData), StopStationData]] = []
 
@@ -90,37 +91,18 @@ class StationData(BaseModel):
                 # next_stop_stationが不明ならスキップ
                 if not train.next_stop_station:
                     continue
-                
-                # この駅が始発駅 or selfが次に停車する駅なら
-                if train.next_stop_station is self:
-                    trains.append((train,stop))
-                    continue
 
-                # 列車が始発駅にいるなら
-                # 始発駅には停車時刻が設定されていないため先に処理
-                if train.next_stop_station == train.start_station:
+                # この駅が、次に停車する駅と同じか、それより後に停車する駅なら
+                # （時刻不明の停車駅でも判定できるよう、時刻ではなく並び順で比較する）
+                stop_stations = [s.station for s in train.stop_stations]
+                if stop_stations.index(self) >= stop_stations.index(train.next_stop_station):
                     trains.append((train,stop))
-                    continue
-
-                # その列車がこの駅(self)に停車する時刻を取得
-                train_stops_self_time = stop.time
-                # その列車がnext_stationの駅に停車する時刻を取得
-                train_stops_next_time = train.get_stop_time(train.next_stop_station) 
-
-                # どちらかが存在しないならスキップ
-                if not train_stops_next_time or not train_stops_self_time:
-                    continue
-                
-                #この駅のほうが大きい(=未来)なら
-                if train_stops_self_time >= train_stops_next_time:
-                    trains.append((train,stop))
-                else:
-                    continue
             else:
                 if self in [s.station for s in train.stop_stations] and train.status == "scheduled":
                     trains.append((train,stop))
 
-        trains.sort(key=lambda x:x[1].time or datetime.datetime.min.replace(tzinfo=JST))
+        # 時刻不明の停車は後ろに回す
+        trains.sort(key=lambda x:x[1].time or datetime.datetime.max.replace(tzinfo=JST))
         return trains
 
     def __str__(self):
@@ -365,7 +347,10 @@ class TrainData(BaseModel):
         if self.is_completed == True:
             return "completed"
         # もし終着駅の予定時刻を過ぎていたらcompleted
+        # 終着駅の時刻が不明なら、時刻が分かっている最後の停車駅で判定する
         stop_time = self.get_stop_time(self.destination)
+        if stop_time is None:
+            stop_time = next((stop.time for stop in reversed(self.stop_stations) if stop.time), None)
         if stop_time:
             if stop_time < datetime.datetime.now(JST):
                 return "completed"
@@ -374,10 +359,9 @@ class TrainData(BaseModel):
     # 停車駅リスト
     @property
     def stop_stations(self) -> list[StopStationData]:
-        """停車する駅のリストを返します。"""
-        stops = [station for station in self.route_stations if station.is_stop == True]
-        stops.sort(key = lambda x:x.time or datetime.datetime.min.replace(tzinfo=JST))
-        return stops
+        """停車する駅のリストを走行順に返します。"""
+        # ダイヤの並び順は走行順。時刻不明の停車駅もあるため、時刻でソートしない
+        return [station for station in self.route_stations if station.is_stop == True]
     
     def get_stop_time(self, station:StationData) -> Optional[datetime.datetime]:
         """駅に停車する時刻を返します。"""
@@ -921,14 +905,13 @@ class KHTracker:
                         )
                     continue
 
+                # 3桁目が0なら通過、1・2なら停車
+                # 99:99 は通過のほか、停車するが時刻不明の場合もある（ダイヤ乱れ時の運転整理など）
+                is_stop:bool = stop_station.stationNumber[2] != "0"
                 ltime = tuple(map(int,stop_station.stationDepTime.split(":"))) #22:30 -> (22,30)
-                # 停車しない駅
                 if ltime == (99,99):
-                    is_stop:bool = False
                     time = None
-                # 停車駅なら
                 else:
-                    is_stop:bool = True
                     time = datetime.datetime.combine(self.date, datetime.time.min) + datetime.timedelta(hours=ltime[0],minutes=ltime[1])
                     time = time.replace(tzinfo=JST)
                 self.trains[wdf].route_stations.append(
@@ -947,8 +930,8 @@ class KHTracker:
                 start_station = min(self.trains[wdf].route_stations, key=lambda x:x.time or datetime.datetime.max.replace(tzinfo=JST))
                 start_station.is_start = True
 
-            # 終着駅
-            final_station = max(self.trains[wdf].route_stations, key=lambda x:x.time or datetime.datetime.min.replace(tzinfo=JST))
+            # 終着駅（ダイヤの並び順は走行順。時刻不明の停車駅もあるため、時刻ではなく並び順で最後の停車駅とする）
+            final_station = [stop for stop in self.trains[wdf].route_stations if stop.is_stop][-1]
             final_station.is_final = True
 
         return self
