@@ -319,7 +319,7 @@ def test_regist_dia_parses_stops(api, fresh_tracker):
         _train_info(1, [
             _dia("011", "-"),       # 淀屋橋（始発）
             _dia("021", "12:01"),   # 北浜
-            _dia("031", "99:99"),   # 天満橋（通過）
+            _dia("030", "99:99"),   # 天満橋（通過）
             _dia("9", "12:03"),     # 3桁でないものは無視
             _dia("991", "12:04"),   # 未登録の駅は無視
             _dia("041", "12:05"),   # 京橋（終着）
@@ -360,6 +360,54 @@ def test_regist_dia_skips_ext_train_unless_active(api, fresh_tracker):
     assert 1 not in fresh_tracker.trains
     assert 2 in fresh_tracker.trains
 
+
+@pytest.mark.parametrize("name", ["startTimeList.json", "startTimeList_holiday.json"])
+def test_station_number_third_digit_means_pass(name):
+    """通常のダイヤでは、stationNumber の3桁目が0 ⇔ 時刻が99:99（通過）。崩れたらAPIの仕様変更を疑う"""
+    for train in load_fixture(name)["TrainInfo"]:
+        for stop in train["diaStationInfoObjects"]:
+            assert (stop["stationNumber"][2] == "0") == (stop["stationDepTime"] == "99:99"), (train["wdfBlockNo"], stop)
+
+
+def test_regist_dia_stop_with_unknown_time(api, fresh_tracker):
+    """ダイヤ乱れ時は、停車するが時刻不明（99:99）の駅がある。3桁目で停車・通過を判定する"""
+    # 2025-03-21 の wdf 336（淀屋橋発出町柳行き準急）を元にしたダイヤ。萱島より先は時刻不明
+    dias = [_dia("011", "-"), _dia("021", "12:01"), _dia("031", "12:03"), _dia("041", "12:05"),
+            _dia("111", "12:10"), _dia("161", "12:15"), _dia("990", "99:99")]
+    dias += [_dia(f"{n:02}2", "99:99") for n in range(17, 43)]
+    api.set_json(POSITION_PATH, make_position_list("20261006120000"))
+    api.set_json(STARTTIME_PATH, _start_time_list([_train_info(1, dias)]))
+    run(fresh_tracker.fetch_pos())
+
+    train = fresh_tracker.trains[1]
+    assert [s.station.station_number for s in train.stop_stations] == [1, 2, 3, 4, 11, 16] + list(range(17, 43))
+    assert train.destination.station_number == 42
+    assert train.get_stop_time(fresh_tracker.stations[17]) is None
+    assert train.train_type == TrainType.SUB_EXP
+    # 終着駅の時刻が不明でも、時刻が分かっている最後の停車駅（萱島 12:15）で判定する
+    assert train.status == "completed"
+
+
+def test_upcoming_trains_with_unknown_time(api, fresh_tracker):
+    """時刻不明の停車駅があっても、走行中の列車がこれから停車する駅の発車標に出る"""
+    data = load_fixture("startTimeList.json")
+    # wdf 1096：上り特急三条行き、石清水八幡宮→中書島 走行中。中書島より先の停車駅の時刻を不明にする
+    info = next(t for t in data["TrainInfo"] if t["wdfBlockNo"] == "1096")
+    for stop in info["diaStationInfoObjects"]:
+        if int(stop["stationNumber"][:2]) > 28 and stop["stationNumber"][2] != "0":
+            stop["stationDepTime"] = "99:99"
+    api.set_json(STARTTIME_PATH, data)
+    run(fresh_tracker.fetch_pos())
+
+    train = fresh_tracker.trains[1096]
+    assert train.next_stop_station.station_number == 28
+    assert [s.station.station_number for s in train.stop_stations][-4:] == [30, 37, 39, 40]
+    assert train.destination.station_number == 40
+
+    tambabashi = fresh_tracker.stations[30].upcoming_trains
+    assert (train, train.stop_stations[-4]) in tambabashi
+    assert tambabashi[-1][0] is train  # 時刻不明は後ろ
+    assert train not in [t for t, _ in fresh_tracker.stations[24].upcoming_trains]  # 樟葉は通過済み
 
 
 # ---------------------------------------------------------------- ダイヤに無い列車
