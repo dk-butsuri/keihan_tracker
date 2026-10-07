@@ -227,6 +227,7 @@ class TrainData(BaseModel):
             st_kadomashi = self.master.stations[13]    # KH13 門真市
             st_kayashima = self.master.stations[16]    # KH16 萱島
             st_neyagawashi = self.master.stations[17]  # KH17 寝屋川市
+            st_korien = self.master.stations[18]       # KH18 香里園
             st_hirakatakoen = self.master.stations[20] # KH20 枚方公園
             st_hirakatashi = self.master.stations[21]  # KH21 枚方市
             
@@ -269,7 +270,11 @@ class TrainData(BaseModel):
                 # 鳥羽街道を通過する列車（例：淀行き急行）
                 if st_fushimiinari in stop_stations_list:
                     return TrainType.EXPRESS
-                
+
+                # 寝屋川市・香里園に停車するなら快速急行（例：寝屋川市発出町柳行き）
+                if st_neyagawashi in stop_stations_list or st_korien in stop_stations_list:
+                    return TrainType.RAPID_EXP
+
                 # return TrainType.LINER
                 return TrainType.LTD_EXP
             
