@@ -1,6 +1,8 @@
 /.venv
 .git_old
 __pycache__
+/.pytest_cache/
+/.claude/settings.local.json
 /keihan_tracker.egg-info/
 test.py
 /snapshots/

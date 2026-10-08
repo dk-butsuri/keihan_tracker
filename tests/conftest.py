@@ -1,8 +1,9 @@
 """
 テスト共通の準備。
 
-tests/fixtures/ に保存した実際のAPIレスポンス（2026-10-06 21:24頃に取得）を
-httpx.MockTransport で返すことで、ネットワークに接続せずに KHTracker を動かす。
+tests/fixtures/ に保存した実際のAPIレスポンス（2026-10-06 21:24頃に取得）と
+Wayback Machine の26日分のダイヤ・位置情報を httpx.MockTransport で返すことで、
+ネットワークに接続せずに KHTracker を動かす。
 """
 
 import asyncio
@@ -20,6 +21,7 @@ from keihan_tracker import KHTracker
 from keihan_tracker.keihan_train.tracker import JST
 
 FIXTURES = Path(__file__).parent / "fixtures"
+WAYBACK_SNAPSHOTS = json.loads((FIXTURES / "wayback" / "manifest.json").read_text(encoding="utf-8"))["snapshots"]
 
 # APIのパス → fixtureのファイル名
 URL_TO_FIXTURE = {
@@ -86,7 +88,7 @@ def make_tracker(api: MockKeihanAPI) -> KHTracker:
     tracker = KHTracker(rate_limit=0)
     tracker.web = httpx.AsyncClient(transport=httpx.MockTransport(api.handler))
     # KHTracker.date は初期化時の実時刻から決まるため、fixtureの取得日にそろえる
-    created = load_fixture("trainPositionList.json")["fileCreatedTime"]
+    created = json.loads(api.responses["/zaisen-up/trainPositionList.json"])["fileCreatedTime"]
     tracker.date = datetime.datetime.strptime(created, "%Y%m%d%H%M%S").replace(tzinfo=JST).date()
     return tracker
 
@@ -112,3 +114,46 @@ def tracker() -> KHTracker:
     t = make_tracker(MockKeihanAPI())
     run(t.fetch_pos())
     return t
+
+
+@pytest.fixture(scope="module")
+def holiday_tracker() -> KHTracker:
+    """土休日ダイヤ（2026-06-14 日曜、Wayback Machine より）。読み取り専用で使うこと。"""
+    api = MockKeihanAPI()
+    api.responses["/zaisen-up/startTimeList.json"] = load_fixture_bytes("startTimeList_holiday.json")
+    # 保存済みの土休日データはダイヤのみのため、ダイヤからの推定を検証する。
+    api.set_json("/zaisen-up/trainPositionList.json", make_position_list("20260614133525"))
+    t = make_tracker(api)
+    run(t.fetch_pos())
+    return t
+
+
+def make_wayback_tracker(snapshot: dict) -> KHTracker:
+    """manifest に記録したダイヤと、その取得時刻に近い位置情報を組み合わせる。"""
+    api = MockKeihanAPI()
+    timetable = snapshot["timetable"]
+    api.responses["/zaisen-up/startTimeList.json"] = load_fixture_bytes(
+        "wayback/" + timetable["file"].removesuffix(".gz")
+    )
+    if snapshot["position"] is not None:
+        api.responses["/zaisen-up/trainPositionList.json"] = load_fixture_bytes(
+            "wayback/" + snapshot["position"]["file"].removesuffix(".gz")
+        )
+    else:
+        # 位置情報が保存されていない3件は、ダイヤからの推定を検証する。
+        api.set_json("/zaisen-up/trainPositionList.json", make_position_list(timetable["file_created_time"]))
+    t = make_tracker(api)
+    run(t.fetch_pos())
+    return t
+
+
+@pytest.fixture(
+    scope="module",
+    params=[None, *WAYBACK_SNAPSHOTS],
+    ids=["weekday", *("wayback-" + snapshot["id"] for snapshot in WAYBACK_SNAPSHOTS)],
+)
+def saved_tracker(request) -> KHTracker:
+    """現在の平日データと、保存済みの全Waybackスナップショット。読み取り専用。"""
+    if request.param is None:
+        return request.getfixturevalue("tracker")
+    return make_wayback_tracker(request.param)
