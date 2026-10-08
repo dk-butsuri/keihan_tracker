@@ -13,7 +13,7 @@ import pytest
 
 from keihan_tracker import ActiveTrainData, KHTracker, TrainData, TrainType
 
-from conftest import MockKeihanAPI, load_fixture_bytes, make_position_list, make_tracker, run
+from conftest import MockKeihanAPI, make_position_list, make_tracker, run
 
 POSITION_PATH = "/zaisen-up/trainPositionList.json"
 STARTTIME_PATH = "/zaisen-up/startTimeList.json"
@@ -268,17 +268,6 @@ def pattern_tracker() -> KHTracker:
         "fileVersion": "1.0.0",
         "TrainInfo": [_train_info(i + 1, pattern) for i, (pattern, _) in enumerate(ALL_STOP_PATTERNS)],
     })
-    tracker = make_tracker(api)
-    run(tracker.fetch_pos())
-    return tracker
-
-
-@pytest.fixture(scope="module")
-def holiday_tracker() -> KHTracker:
-    """土休日ダイヤ（2026-06-14 日曜、Wayback Machine より）を読み込んだ KHTracker"""
-    api = MockKeihanAPI()
-    api.responses[STARTTIME_PATH] = load_fixture_bytes("startTimeList_holiday.json")
-    api.set_json(POSITION_PATH, make_position_list("20260614133525"))
     tracker = make_tracker(api)
     run(tracker.fetch_pos())
     return tracker

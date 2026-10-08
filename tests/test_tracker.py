@@ -141,10 +141,13 @@ def test_inferred_train_type_matches_actual(tracker):
         assert inferred == expected, f"{train.train_number}号 (wdf {train.wdfBlockNo})"
 
 
-def test_inferred_direction_matches_actual(tracker):
-    for train in tracker.active_trains.values():
+def test_inferred_direction_matches_actual(saved_tracker):
+    """現在・過去の走行中列車で、ダイヤから推定した方向が公式の方向と一致すること"""
+    for train in saved_tracker.active_trains.values():
+        if not train.has_dia:
+            continue  # 運転整理でダイヤに無い列車は、公式の方向のみ取得できる。
         inferred = TrainData(
-            master=tracker,
+            master=saved_tracker,
             wdfBlockNo=train.wdfBlockNo,
             date=train.date,
             has_premiumcar=None,
@@ -152,6 +155,28 @@ def test_inferred_direction_matches_actual(tracker):
             route_stations=train.route_stations,
         ).direction
         assert inferred == train.direction, f"{train.train_number}号 (wdf {train.wdfBlockNo})"
+
+
+@pytest.mark.parametrize(
+    ("destination_number", "expected_direction"),
+    [
+        pytest.param(42, "up", id="demachiyanagi-up"),
+        pytest.param(1, "down", id="yodoyabashi-down"),
+        pytest.param(54, "down", id="nakanoshima-down"),
+    ],
+)
+def test_direction_matches_terminal_destination(saved_tracker, destination_number, expected_direction):
+    """現在・過去の平日・土休日ダイヤの全該当列車で、終端駅行きの方向が正しいこと"""
+    trains = [
+        train for train in saved_tracker.trains.values()
+        if train.destination.station_number == destination_number
+    ]
+    assert trains, f"fixtureにKH{destination_number:02d}行きの列車がありません"
+    for train in trains:
+        assert train.direction == expected_direction, (
+            f"wdf {train.wdfBlockNo}: {train.destination.station_name.ja}行き "
+            f"direction={train.direction} (expected {expected_direction})"
+        )
 
 
 def test_midnight_time_is_next_day(tracker):
