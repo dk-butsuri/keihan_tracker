@@ -172,3 +172,27 @@ def test_broken_dia_retried_on_next_fetch(api, fresh_tracker):
     assert api.requests.count(STARTTIME_PATH) == 4
     assert fresh_tracker.last_regist_dia_date == datetime.date(2026, 10, 7)
     assert all(t.date == datetime.date(2026, 10, 7) for t in fresh_tracker.trains.values())
+
+
+# ---------------------------------------------------------------- 寝屋川信号場への回送
+
+
+def test_train_to_neyagawa_depot(api, fresh_tracker):
+    """寝屋川市止まりの急行(wdf 1265)が、着いたあと寝屋川信号場へ向かっている。
+
+    ダイヤでは寝屋川市(172)の後に寝屋川信号場(990)が続き、公式の行先は寝屋川市のまま。
+    """
+    api.responses[POSITION_PATH] = _position("position_beyond_terminal.json")
+    run(fresh_tracker.fetch_pos())
+
+    train = fresh_tracker.trains[1265]
+    assert isinstance(train, ActiveTrainData)
+    assert train.destination.station_number == 17
+    assert train.stop_stations[-1].station.station_number == 17
+    assert train.direction == "down"
+    assert not train.is_stopping
+    assert train.next_station.station_number == 16  # 萱島方向
+    assert train.next_stop_station is None
+    assert "不明駅" in str(train)
+    # 萱島には停車しないので、萱島の接近列車には出ない
+    assert all(t is not train for t, _ in fresh_tracker.stations[16].upcoming_trains)
