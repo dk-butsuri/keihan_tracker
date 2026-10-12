@@ -1,0 +1,85 @@
+{
+  "snapshots": [
+    {
+      "file": "position_nul_padded.json.gz",
+      "description": "末尾にNUL(0x00)が6バイト付いて、JSONとして読めない",
+      "saved_at_jst": "2026-10-07 08:39:35",
+      "file_created_time": null,
+      "train_count": null,
+      "bytes": 54024,
+      "sha256": "0e14e726a3c4080eeb107bc1504ea4add3d27f73825c08c8281e6922c3e6e941"
+    },
+    {
+      "file": "position_truncated.json.gz",
+      "description": "本文が途中で切れて、JSONとして読めない",
+      "saved_at_jst": "2026-10-07 08:43:36",
+      "file_created_time": null,
+      "train_count": null,
+      "bytes": 52428,
+      "sha256": "cd58186389253f9714a4cf866dc857ba18ef8a6a862d6363333f5821428e3a60"
+    },
+    {
+      "file": "position_dest_none.json.gz",
+      "description": "23:53の27列車すべてが、行先 destStationNumber=\"00\"・destStationCode=\"\" で出ている",
+      "saved_at_jst": "2026-10-07 23:53:32",
+      "file_created_time": "20261007235324",
+      "train_count": 27,
+      "bytes": 20886,
+      "sha256": "db3a0e8d22e6cacfe089af58ff9179df4e06c1e511345dbe7833569614ec870f"
+    },
+    {
+      "file": "position_direction_glitch_1.json.gz",
+      "description": "1001号(wdf 445)が淀に停車中の状態で初めて現れた。trainDirection=0(up)だが、実際は下り(中之島行き)",
+      "saved_at_jst": "2026-10-07 09:54:52",
+      "file_created_time": "20261007095445",
+      "train_count": 51,
+      "bytes": 40631,
+      "sha256": "96ce086022316c0272495554dbe9c288d332df24513baca7c8699813afa1503a"
+    },
+    {
+      "file": "position_direction_glitch_2.json.gz",
+      "description": "同じ列車の1分後。trainDirection=1(down)に直っている",
+      "saved_at_jst": "2026-10-07 09:55:52",
+      "file_created_time": "20261007095546",
+      "train_count": 50,
+      "bytes": 39829,
+      "sha256": "b400db5a2da4355b2d6b3abd8aed253a71361e0757742362be3b90c23627228c"
+    },
+    {
+      "file": "position_direction_glitch_3.json.gz",
+      "description": "同じ列車が淀を出て、石清水八幡宮へ向かっている(row 47)",
+      "saved_at_jst": "2026-10-07 10:02:54",
+      "file_created_time": "20261007100247",
+      "train_count": 52,
+      "bytes": 41338,
+      "sha256": "89003300e3c21d0f3567180b0e5afb082fa40f75c931e7bd40b85f527f78b772"
+    },
+    {
+      "file": "position_beyond_terminal.json.gz",
+      "description": "寝屋川市止まりの急行(wdf 1265)が終点を過ぎて萱島方向へ走っている",
+      "saved_at_jst": "2026-10-08 00:05:35",
+      "file_created_time": "20261008000527",
+      "train_count": 22,
+      "bytes": 17292,
+      "sha256": "2d791dda65a8bdaf4e3f587004f6f0625b885f7f5020294032323689722025ba"
+    },
+    {
+      "file": "position_dia_not_switched_1.json.gz",
+      "description": "土曜の始発前。位置情報は土曜の列車だが、ダイヤのファイルはまだ金曜のもの",
+      "saved_at_jst": "2026-10-10 04:32:41",
+      "file_created_time": "20261010043152",
+      "train_count": 8,
+      "bytes": 6368,
+      "sha256": "870cd7f2901f87e1fa9f6ab2e5fca4e1fac077ff53aacec2b3d120c7b7b0a6d9"
+    },
+    {
+      "file": "position_dia_not_switched_2.json.gz",
+      "description": "同じく土曜ダイヤへの切替前(04:51)",
+      "saved_at_jst": "2026-10-10 04:51:46",
+      "file_created_time": "20261010045048",
+      "train_count": 9,
+      "bytes": 7157,
+      "sha256": "a5d643cfe8788364747e6bea248c0cd42382a239abab6ba5d12146edaf94501e"
+    }
+  ]
+}
