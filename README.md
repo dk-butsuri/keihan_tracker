@@ -101,14 +101,21 @@ asyncio.run(main())
 
 ```python
 import asyncio
-from keihan_tracker import KHTracker
+import httpx
+from keihan_tracker import KHTracker, KeihanAPIError
 
 async def watch_loop():
     tracker = KHTracker()
     
     while True:
         # データを更新
-        await tracker.fetch_pos()
+        # 公式APIが壊れたデータを返したり、通信に失敗したりしても、次の分で取り直せばよい
+        try:
+            await tracker.fetch_pos()
+        except (KeihanAPIError, httpx.HTTPError) as e:
+            print(f"取得に失敗しました: {e}")
+            await asyncio.sleep(60)
+            continue
         
         # 例: 現在最も遅れている列車を表示
         worst_train = tracker.max_delay_train
@@ -260,10 +267,15 @@ if __name__ == "__main__":
     *   ダイヤに無い列車は、`StationData.arriving_trains` / `upcoming_trains` / `trains` には含まれません。
     *   ダイヤが乱れている間は、ダイヤに載っている列車でも `stop_stations` や `next_stop_station` が実際の運行と異なる場合があります。また、停車駅の時刻が不明（`None`）になることがあります。時刻不明の停車は、`StationData.trains` / `upcoming_trains` では時刻順の最後に並びます。
 
-5.  **駅番号は整数 (int)**
+5.  **公式APIが壊れたデータを返すことがある**
+    *   末尾にNULが付いたJSONや、途中で切れたJSONが返ることがあります（2026年10月7日の朝に4分間で2回確認）。このとき `fetch_pos()` は `KeihanAPIError`（`ValueError` のサブクラス）を送出します。通信の失敗は `httpx.HTTPError` になります。
+    *   位置情報が壊れていた場合、列車の状態は前回の取得のまま変わりません。ダイヤが壊れていた場合は、位置情報だけ更新されています。どちらも次の `fetch_pos()` で取り直すので、ループ内で例外を捕まえて呼び続けてください（上の「2. リアルタイム監視」の例）。
+    *   全列車の行先が「00」（行先なし）で返ることがあります（23時台に確認）。このとき `ActiveTrainData.destination` はダイヤの終着駅で補い、ダイヤも無ければ `None` になります。
+
+6.  **駅番号は整数 (int)**
     *   駅番号（ナンバリング）は `KH01` のような文字列ではなく、数字部分の整数 `1` として扱います。辞書のキーも整数です。
 
-6.  **時刻は日本標準時 (JST)**
+7.  **時刻は日本標準時 (JST)**
     *   ライブラリ内で扱われる `datetime` オブジェクトには、すべてタイムゾーン情報（`Asia/Tokyo`）が付与されています。
     *   現在時刻と比較する場合は、`datetime.now()` ではなく `datetime.now(ZoneInfo("Asia/Tokyo"))` などと比較しないとエラーになります。
 
@@ -289,7 +301,7 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `rate_limit_interval: float`: 現在設定されているレートリミット間隔（秒）
 
 #### 主要メソッド
-*   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。
+*   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。公式APIが壊れたデータを返すと `KeihanAPIError` を送出します。
 *   `async regist_dia(download: bool)`: ダイヤ情報を更新します。通常は `fetch_pos()` から自動的に呼び出されるため、実行する必要はありません。
 *   `find_trains(...)`: 条件に合致する列車をリストで返します。全引数はオプションで、省略した項目は絞り込み対象外となります。
 
@@ -351,6 +363,7 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `is_stopping: bool`: 現在、駅に停車中かどうか
 *   `next_stop_station: StationData`: 次に停車する駅（**停車中の場合はその駅**）
 *   `next_station: StationData`: 次に停車・**通過**する駅
+*   `destination: Optional[StationData]`: 行先駅。位置情報の行先が「00」（行先なし）のときはダイヤの終着駅、ダイヤも無ければ `None`
 *   `delay_minutes: int`: 遅延分数（定刻なら0）
 *   `delay_text: MultiLang`: 遅延テキスト（「約5分」など各言語で）
 *   `train_number: str`: 列車番号 (例: "1051"（号）など)
