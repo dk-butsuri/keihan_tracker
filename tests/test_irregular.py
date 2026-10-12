@@ -5,10 +5,13 @@
 """
 
 import copy
+import datetime
 import hashlib
 import json
 
-from keihan_tracker import ActiveTrainData
+import pytest
+
+from keihan_tracker import ActiveTrainData, KeihanAPIError
 
 from conftest import load_fixture, load_fixture_bytes, make_position_list, run
 
@@ -107,3 +110,65 @@ def test_dest_none_without_dia(api, fresh_tracker):
     assert fresh_tracker.active_trains == {}
     for wdf in trains:
         assert fresh_tracker.trains[wdf].status == "completed"
+
+
+# ---------------------------------------------------------------- 壊れたJSON
+
+
+def _state(tracker) -> dict:
+    return {
+        wdf: (type(train), train.direction, getattr(train, "location_row", None), getattr(train, "location_col", None))
+        for wdf, train in tracker.trains.items()
+    }
+
+
+@pytest.mark.parametrize("name", ["position_nul_padded.json", "position_truncated.json"])
+def test_broken_position_raises_and_keeps_state(api, fresh_tracker, name):
+    run(fresh_tracker.fetch_pos())
+    before = _state(fresh_tracker)
+    position_list = fresh_tracker.train_position_list
+
+    api.responses[POSITION_PATH] = _position(name)
+    with pytest.raises(KeihanAPIError):
+        run(fresh_tracker.fetch_pos())
+    assert _state(fresh_tracker) == before
+    assert fresh_tracker.train_position_list is position_list
+
+    # 次の取得で正常なデータが来れば続きから動く
+    data = load_fixture("trainPositionList.json")
+    data["fileCreatedTime"] = "20261006212500"
+    api.set_json(POSITION_PATH, data)
+    run(fresh_tracker.fetch_pos())
+    assert _state(fresh_tracker) == before
+
+
+def test_broken_position_is_value_error(api, fresh_tracker):
+    """KeihanAPIError は ValueError のサブクラスで、元の例外を __cause__ に持つ"""
+    api.responses[POSITION_PATH] = _position("position_nul_padded.json")
+    with pytest.raises(ValueError) as e:
+        run(fresh_tracker.fetch_pos())
+    assert isinstance(e.value, KeihanAPIError)
+    assert isinstance(e.value.__cause__, json.JSONDecodeError)
+
+
+def test_broken_dia_retried_on_next_fetch(api, fresh_tracker):
+    """ダイヤが壊れていたら、1時間待たずに次の取得で取り直す"""
+    good_dia = api.responses[STARTTIME_PATH]
+    run(fresh_tracker.fetch_pos())
+    dia = fresh_tracker.starttime_list
+
+    # 5時に日付が変わり、ダイヤを取り直したら壊れていた
+    api.set_json(POSITION_PATH, make_position_list("20261007050000"))
+    api.responses[STARTTIME_PATH] = good_dia + b"\x00" * 6
+    for _ in range(2):  # 壊れたままなら毎回例外（304で黙って古いダイヤを使わない）
+        with pytest.raises(KeihanAPIError):
+            run(fresh_tracker.fetch_pos())
+        assert fresh_tracker.date == datetime.date(2026, 10, 7)
+        assert fresh_tracker.starttime_list is dia
+    assert api.requests.count(STARTTIME_PATH) == 3
+
+    api.responses[STARTTIME_PATH] = good_dia
+    run(fresh_tracker.fetch_pos())
+    assert api.requests.count(STARTTIME_PATH) == 4
+    assert fresh_tracker.last_regist_dia_date == datetime.date(2026, 10, 7)
+    assert all(t.date == datetime.date(2026, 10, 7) for t in fresh_tracker.trains.values())

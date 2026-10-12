@@ -21,7 +21,7 @@ from . import stations_map
 from .position_calculation import calc_position
 from pydantic import BaseModel, Field
 import warnings
-from typing import Optional, Literal, Sequence
+from typing import Optional, Literal, Sequence, TypeVar
 from httpx import AsyncClient, Response
 from pathlib import Path
 import asyncio
@@ -35,6 +35,24 @@ from zoneinfo import ZoneInfo
 
 JST = ZoneInfo("Asia/Tokyo")
 DATE_CHANGE_TIME = 5
+
+
+class KeihanAPIError(ValueError):
+    """
+    公式APIが読み込めないデータ（壊れたJSON・想定外の形式）を返したことを表す例外。
+    末尾にNULが付く、本文が途中で切れる、などが実際に起きている。
+    列車の状態は読み込めた分まで更新されているので、次の取得で再試行すればよい。
+    """
+
+
+_Model = TypeVar("_Model", bound=BaseModel)
+
+
+def _parse(model: type[_Model], text: str, url: str) -> _Model:
+    try:
+        return model.model_validate(json.loads(text))
+    except ValueError as e: # json.JSONDecodeError, pydantic.ValidationError
+        raise KeihanAPIError(f"{url} を読み込めませんでした: {e}") from e
 
 
 class DiaNotFoundError(ValueError):
@@ -703,8 +721,8 @@ class KHTracker:
         "列車走行位置を更新します。1分に1回が適切でしょう。"
         #不変データをダウンロード
         if not self.select_station:
-            text = await self._get("https://www.keihan.co.jp/zaisen/select_station.json")
-            self.select_station = SelectStation.model_validate(json.loads(text))
+            url = "https://www.keihan.co.jp/zaisen/select_station.json"
+            self.select_station = _parse(SelectStation, await self._get(url), url)
             # select_stationから駅データを登録
             for line,line_detail in self.select_station.root.items():
                 for number, name in line_detail.stations.items():
@@ -720,8 +738,8 @@ class KHTracker:
                                                 station_name = name,
                     )
         if not self.transfer_guide_info:
-            text = await self._get("https://www.keihan.co.jp/zaisen/transferGuideInfo.json")
-            self.transfer_guide_info = TransferGuideInfo.model_validate(json.loads(text))
+            url = "https://www.keihan.co.jp/zaisen/transferGuideInfo.json"
+            self.transfer_guide_info = _parse(TransferGuideInfo, await self._get(url), url)
             # transferGuideInfoから乗り換え情報を登録
             for number, transfers in self.transfer_guide_info.root.items():
                 number = int(number[2:])
@@ -737,9 +755,9 @@ class KHTracker:
         
         # 列車位置を取得
         self.last_fetch_pos_datetime = now
-        text = await self._get("https://www.keihan.co.jp/zaisen-up/trainPositionList.json")
-        self.train_position_list = trainPositionList.model_validate(json.loads(text))
-        del text
+        # 壊れていれば、列車の状態を変える前に KeihanAPIError で止まる
+        url = "https://www.keihan.co.jp/zaisen-up/trainPositionList.json"
+        self.train_position_list = _parse(trainPositionList, await self._get(url), url)
 
         # 日付更新
         if 0 <= self.train_position_list.fileCreatedTime.hour < DATE_CHANGE_TIME:
@@ -861,14 +879,20 @@ class KHTracker:
         "ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
         starttime_list = self.starttime_list
         if download or starttime_list is None:
+            url = "https://www.keihan.co.jp/zaisen-up/startTimeList.json"
+            try:
+                if starttime_list is None:
+                    starttime_list = _parse(startTimeList, await self._get(url), url)
+                # 変わっていなければ本体を受け取らず、手元のダイヤをそのまま使う
+                elif (text := await self._get_if_modified(url)) is not None:
+                    starttime_list = _parse(startTimeList, text, url)
+            except KeihanAPIError:
+                # 壊れた本文のETagで304が返り続けないよう忘れ、次の取得で取り直す
+                self._etags.pop(url, None)
+                raise
+            # 読み込めてから記録する（先に記録すると、壊れていたとき1時間取り直さない）
             self.last_regist_dia_date = self.date
             self.last_regist_dia_datetime = datetime.datetime.now(JST)
-            url = "https://www.keihan.co.jp/zaisen-up/startTimeList.json"
-            if starttime_list is None:
-                starttime_list = startTimeList.model_validate(json.loads(await self._get(url)))
-            # 変わっていなければ本体を受け取らず、手元のダイヤをそのまま使う
-            elif (text := await self._get_if_modified(url)) is not None:
-                starttime_list = startTimeList.model_validate(json.loads(text))
             self.starttime_list = starttime_list
 
         # startTimeListからデータを登録

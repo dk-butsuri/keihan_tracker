@@ -1,7 +1,7 @@
 import gzip
 
 import pytest
-from pydantic import ValidationError
+from keihan_tracker import KeihanAPIError
 
 from conftest import load_fixture_bytes, make_position_list, make_tracker, run
 
@@ -51,7 +51,7 @@ def test_snapshot_saved_even_if_validation_fails(api, tmp_path):
     tracker = make_tracker(api)
     tracker.snapshot_dir = tmp_path
     api.responses[POSITION_PATH] = b'{"unexpected": true}'
-    with pytest.raises(ValidationError):
+    with pytest.raises(KeihanAPIError):
         run(tracker.fetch_pos())
 
     saved = next(tmp_path.rglob("*_trainPositionList.json.gz"))
