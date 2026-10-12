@@ -815,6 +815,16 @@ class KHTracker:
                     )
                     active_train.delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
 
+                    # 行先を更新（運転整理で変わることがある）。行先なし(00)の間は直前の値を保つ
+                    if train.destStationNumber in self.stations:
+                        active_train.active_destination = self.stations[train.destStationNumber]
+
+                    # 方向を更新（出現直後の1分だけ誤った値になることがある）
+                    # ただし終点に停車中は次の運行の向きに変わるため、そのままにする
+                    at_terminal = active_train.is_stopping and active_train.next_station == active_train.destination
+                    if not at_terminal:
+                        active_train.active_direction = "up" if trainlist.trainDirection == 0 else "down"
+
                     # lastPassStationを更新
                     if train.lastPassStation != 99 and train.lastPassStation != 0:
                         active_train.lastpass_station = self.stations[train.lastPassStation]
