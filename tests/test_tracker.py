@@ -306,6 +306,42 @@ def test_active_train_updated(api, fresh_tracker):
     assert fresh_tracker.max_delay_minutes == 3
 
 
+def _flip_direction(data: dict, wdf: str) -> dict:
+    loc = next(loc for loc in data["locationObjects"] if loc["trainInfoObjects"][0]["wdfBlockNo"] == wdf)
+    loc["trainDirection"] = "1" if str(loc["trainDirection"]) == "0" else "0"
+    return loc
+
+
+def test_direction_corrected_on_next_fetch(api, fresh_tracker):
+    # 出現直後の1分だけ方向が誤っていた場合、次の取得で直る
+    data = copy.deepcopy(load_fixture("trainPositionList.json"))
+    _flip_direction(data, "1096")
+    api.set_json(POSITION_PATH, data)
+    run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.trains[1096].direction == "down"
+
+    api.set_json(POSITION_PATH, load_fixture("trainPositionList.json"))
+    run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.trains[1096].direction == "up"
+
+
+def test_direction_kept_while_stopping_at_terminal(api, fresh_tracker):
+    # 終点に停車中は公式の方向が次の運行の向きに変わるが、追従しない
+    run(fresh_tracker.fetch_pos())
+    train = next(t for t in fresh_tracker.active_trains.values() if t.is_stopping)
+    wdf, direction = train.wdfBlockNo, train.direction
+
+    data = copy.deepcopy(load_fixture("trainPositionList.json"))
+    loc = _flip_direction(data, str(wdf))
+    loc["trainInfoObjects"][0]["destStationNumber"] = str(train.next_station.station_number)
+    api.set_json(POSITION_PATH, data)
+    run(fresh_tracker.fetch_pos())
+
+    train = fresh_tracker.trains[wdf]
+    assert train.destination == train.next_station
+    assert train.direction == direction
+
+
 @pytest.mark.parametrize(
     ("file_created_time", "expected_date"),
     [
