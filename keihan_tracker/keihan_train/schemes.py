@@ -123,7 +123,7 @@ class trainInfoObject(BaseModel):
     delayMinutesKo:     str
     delayMinutesZhCn:   str
     delayMinutesZhTw:   str
-    destStationCode:    int
+    destStationCode:    Optional[int]   # 行先なしのときは""で来る
     destStationNameEn:  str
     destStationNameJp:  str
     destStationNameKo:  str
@@ -139,6 +139,11 @@ class trainInfoObject(BaseModel):
     trainTypeKo:        str
     trainTypeZhCn:      str
     trainTypeZhTw:      str
+
+    @field_validator("destStationCode", mode="before")
+    @classmethod
+    def empty_dest_code(cls, v):
+        return None if v == "" else v
 
     @model_validator(mode="before")
     @classmethod

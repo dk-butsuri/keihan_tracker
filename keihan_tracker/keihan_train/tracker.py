@@ -401,7 +401,7 @@ class ActiveTrainData(TrainData):
     train_number:   str             # 列車番号（1051号など）
     active_train_type:  TrainType            = Field(alias="train_type")
     active_direction:   Literal["up","down"] = Field(alias="direction")     # 方向（up:京都方面、down:大阪方面）
-    active_destination: StationData          = Field(alias="destination")   # 行先駅
+    active_destination: Optional[StationData] = Field(alias="destination")  # 行先駅（行先なし(00)ならNone）
     is_special:     bool            # 臨時か
     station_arrival_time: Optional[datetime.datetime] = None # 現在の駅に停車した時刻
     has_premiumcar: Optional[bool] = None
@@ -418,8 +418,13 @@ class ActiveTrainData(TrainData):
         return self.active_train_type
 
     @property
-    def destination(self):
-        return self.active_destination
+    def destination(self) -> Optional[StationData]:
+        """行先駅。位置情報で行先なし(00)のときはダイヤの終着駅、ダイヤも無ければNone"""
+        if self.active_destination is not None:
+            return self.active_destination
+        if self.has_dia:
+            return super().destination
+        return None
 
     @property
     def direction(self) -> Literal["up","down"]:
@@ -776,7 +781,7 @@ class KHTracker:
                         wdfBlockNo=wdf,
                         date=self.date,
                         train_number = train.trainNumber,
-                        destination = self.stations[train.destStationNumber],
+                        destination = self.stations.get(train.destStationNumber),
                         train_type = train.trainTypeJp,
                         is_special = train.is_special,
                         cars = train.carsOfTrain,
