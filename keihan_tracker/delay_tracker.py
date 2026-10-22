@@ -1,6 +1,6 @@
 from pydantic import BaseModel, field_validator, BeforeValidator, Field
 from typing import Optional, Union, Annotated, List, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup as bs
 import asyncio
@@ -83,6 +83,17 @@ class ResponseModel(BaseModel):
     ResultSet: ResultSetData
 
 
+def _announced_at(month: int, day: int, hour: int, minute: int, now: datetime) -> datetime:
+    # 掲載時刻に年が無い。年明けに前年12月の掲載を読むと1年先になるため、先の日時なら前年とみなす
+    for year in (now.year, now.year - 1):
+        try:
+            dt = datetime(year, month, day, hour, minute, tzinfo=JST)
+        except ValueError:
+            continue
+        if dt <= now + timedelta(days=1):
+            return dt
+    raise ValueError(f"掲載時刻 {month}月{day}日{hour}時{minute}分 を解釈できません。")
+
 async def get_yahoo_delay(area:int=6) -> list[DelayLine]:
     async with httpx.AsyncClient() as crowler:
         html = await crowler.get(f"{BASE_URL}{area}")
@@ -123,24 +134,22 @@ async def get_yahoo_delay(area:int=6) -> list[DelayLine]:
             if m is None:
                 raise ValueError("掲載時刻のスクレイピングに失敗しました。")
             
-            dt = datetime(
-                year=datetime.now().year,  # 年は別途補完
-                month=int(m["month"]),
-                day=int(m["day"]),
-                hour=int(m["hour"]),
-                minute=int(m["minute"]),
-                tzinfo=JST
-            )
+            dt = _announced_at(int(m["month"]), int(m["day"]), int(m["hour"]), int(m["minute"]), datetime.now(JST))
 
             delays.append(DelayLine(LineName=line, status=title, detail=text, AnnouncedTime=dt))
         return delays
     
 async def get_ekispert_delay(api_key:str, prefs:list[int]=[26,27,28]) -> list[DelayLine]:
     async with httpx.AsyncClient() as web:
-        uri = f"https://api.ekispert.jp/v1/json/operationLine/service/rescuenow/information?key={api_key}"    
-        uri += f"&prefectureCode={':'.join(map(str,prefs))}"
-        request = await web.get(uri)
-        request.raise_for_status()
+        uri = "https://api.ekispert.jp/v1/json/operationLine/service/rescuenow/information"
+        request = await web.get(uri, params={"key": api_key, "prefectureCode": ":".join(map(str,prefs))})
+        try:
+            request.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            # 駅すぱあとはキーをURLでしか受け付けない。httpxのエラー文はURLを含むので、キーを伏せて出し直す
+            url = e.request.url.copy_set_param("key", "***")
+            raise httpx.HTTPStatusError(f"{e.response.status_code} {e.response.reason_phrase} for url '{url}'",
+                                        request=httpx.Request(e.request.method, url), response=e.response) from None
         res = ResponseModel.model_validate(request.json())
         
         results:dict[str,DelayLine] = {}
