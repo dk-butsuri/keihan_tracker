@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup as bs
 import asyncio
 import httpx
 import re
+import warnings
 from urllib.parse import urljoin
 
 JST = ZoneInfo("Asia/Tokyo")
@@ -95,6 +96,12 @@ def _announced_at(month: int, day: int, hour: int, minute: int, now: datetime) -
     raise ValueError(f"掲載時刻 {month}月{day}日{hour}時{minute}分 を解釈できません。")
 
 async def get_yahoo_delay(area:int=6) -> list[DelayLine]:
+    """【非推奨】Yahoo!路線情報の運行情報を取得します。将来削除する可能性があります。"""
+    warnings.warn(
+        "get_yahoo_delay は非推奨です。Yahoo!路線情報は運行情報の二次利用を禁止しているため、"
+        "将来のバージョンで削除する可能性があります。",
+        DeprecationWarning, stacklevel=2,
+    )
     async with httpx.AsyncClient() as crowler:
         html = await crowler.get(f"{BASE_URL}{area}")
 
@@ -140,6 +147,12 @@ async def get_yahoo_delay(area:int=6) -> list[DelayLine]:
         return delays
     
 async def get_ekispert_delay(api_key:str, prefs:list[int]=[26,27,28]) -> list[DelayLine]:
+    """【非推奨】駅すぱあとの運行情報APIから運行情報を取得します。将来削除する可能性があります。"""
+    warnings.warn(
+        "get_ekispert_delay は非推奨です。駅すぱあとのAPIは有料契約が必要で動作を確認できないため、"
+        "将来のバージョンで削除する可能性があります。",
+        DeprecationWarning, stacklevel=2,
+    )
     async with httpx.AsyncClient() as web:
         uri = "https://api.ekispert.jp/v1/json/operationLine/service/rescuenow/information"
         request = await web.get(uri, params={"key": api_key, "prefectureCode": ":".join(map(str,prefs))})
