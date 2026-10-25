@@ -178,6 +178,7 @@ from keihan_tracker.bus.tracker import get_khbus_info
 
 async def main():
     # バス停名と番号を指定（番号はのりばや方向によって異なります）
+    # 同じバス停は30秒以内に呼び出すと、前回の結果を返します
     bus_info = await get_khbus_info("京阪香里園", 1)
 
     for bus in bus_info.body.busstates:
