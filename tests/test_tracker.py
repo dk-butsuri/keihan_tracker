@@ -306,6 +306,35 @@ def test_active_train_updated(api, fresh_tracker):
     assert fresh_tracker.max_delay_minutes == 3
 
 
+def test_staying_time(api, fresh_tracker):
+    # 1096は石清水八幡宮→中書島を走行中（駅間）。fixtureの作成時刻は 2026-10-06 21:24:09
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    assert isinstance(train, ActiveTrainData)
+    assert not train.is_at_station
+    # 出現した時点では、それより前の時間は分からないので0
+    assert train.staying_time == datetime.timedelta(0)
+
+    # 20分間同じ座標なら、駅間でも足止めとして時間が増える
+    data = copy.deepcopy(load_fixture("trainPositionList.json"))
+    data["fileCreatedTime"] = "20261006214409"
+    api.set_json(POSITION_PATH, data)
+    run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.trains[1096].staying_time == datetime.timedelta(minutes=20)
+
+    # 座標が変わったら0に戻る
+    data = copy.deepcopy(data)
+    data["fileCreatedTime"] = "20261006214509"
+    target = next(
+        loc for loc in data["locationObjects"]
+        if loc["trainInfoObjects"][0]["wdfBlockNo"] == "1096"
+    )
+    target["locationRow"] = str(int(target["locationRow"]) + 1)
+    api.set_json(POSITION_PATH, data)
+    run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.trains[1096].staying_time == datetime.timedelta(0)
+
+
 def _flip_direction(data: dict, wdf: str) -> dict:
     loc = next(loc for loc in data["locationObjects"] if loc["trainInfoObjects"][0]["wdfBlockNo"] == wdf)
     loc["trainDirection"] = "1" if str(loc["trainDirection"]) == "0" else "0"

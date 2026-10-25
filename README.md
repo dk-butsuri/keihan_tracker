@@ -135,14 +135,14 @@ if __name__ == "__main__":
 
 ### 3. 遅延を加味した停車駅到着時刻の推定
 
-`delay_minutes`だけでは、列車が「単に遅延して走っている」のか「途中駅で足止めされている」のかを区別できません。大幅遅延時は `stopping_time` と `is_at_start_station` を使うことで、推定到着時刻が信頼できるかを判定できます。
-遅延分数を停車時刻表に表示する際は、どの駅で何分間停車しているか表示すると良いでしょう。
+`delay_minutes`だけでは、列車が「単に遅延して走っている」のか「途中で足止めされている」のかを区別できません。大幅遅延時は `staying_time` と `is_at_start_station` を使うことで、推定到着時刻が信頼できるかを判定できます。
+遅延分数を停車時刻表に表示する際は、どこで何分間止まっているか（`is_at_station` なら `next_station` の駅、そうでなければ駅間）を表示すると良いでしょう。
 
 ```python
 from datetime import timedelta
 from keihan_tracker import KHTracker, ActiveTrainData, StationData
 
-STUCK_THRESHOLD = timedelta(minutes=15)  # この時間以上停車なら足止めと判定
+STUCK_THRESHOLD = timedelta(minutes=15)  # この時間以上同じ位置にいるなら足止めと判定
 
 def estimate_arrival(train: ActiveTrainData, station: StationData):
     """
@@ -159,8 +159,8 @@ def estimate_arrival(train: ActiveTrainData, station: StationData):
     if train.is_at_start_station:
         return estimated
 
-    # 閾値以上停車中なら足止めの可能性があり推定信頼度が低い
-    if train.stopping_time > STUCK_THRESHOLD:
+    # 閾値以上同じ位置にいるなら（駅でも駅間でも）足止めの可能性があり推定信頼度が低い
+    if train.staying_time > STUCK_THRESHOLD:
         return None  # 推定不可
 
     return estimated
@@ -377,7 +377,8 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `location_col`, `location_row`: zaisen上のグリッド座標
 *   `is_special: bool`: 臨時列車かどうか
 *   `is_at_start_station: Optional[bool]`: 現在、始発駅に停車中かどうか（`is_stopping` が `None` のときは `None`）
-*   `stopping_time: datetime.timedelta`: 現在の駅に停車している時間。走行中は `timedelta(0)` を返す
+*   `staying_time: datetime.timedelta`: 今の座標に留まっている時間。駅でも駅間でも、座標が変わらなければ増える。最後に取得した位置情報の作成時刻で測るため、取得の間やAPIが止まっている間は増えない。座標が粗いため走行中でも数分は増えることがあり、出現直後はそれ以前の時間を含まない
+*   `position_since: Optional[datetime.datetime]`: 今の座標に来た時刻（位置情報の作成時刻）
 *   `lastpass_station: Optional[StationData]`: ⚠️ **使用非推奨**。基本的に停車中 or 次に停車する駅。公式zaisenページの列車詳細における停車時刻表示の開始基準として使われる内部値であり、「最後に通過した駅」として厳密に管理されているわけではありません。例えば萱島～京橋を走る各駅列車でも常に萱島が設定されるなど、路線・区間によって信頼性の低い値が返ります。
 
 ### StationData
