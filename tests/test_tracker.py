@@ -499,8 +499,10 @@ def test_active_train_without_dia(no_dia_tracker):
     assert issubclass(DiaNotFoundError, ValueError)
     assert train.stop_stations == []
     assert train.next_stop_station is None
-    assert train.is_stopping
-    assert not train.is_at_start_station
+    # 駅の位置にはいるが、停車か通過かはダイヤが無いと分からない
+    assert train.is_at_station
+    assert train.is_stopping is None
+    assert train.is_at_start_station is None
 
     # 位置情報から分かる情報は使える
     assert train.train_type == TrainType.LOCAL
