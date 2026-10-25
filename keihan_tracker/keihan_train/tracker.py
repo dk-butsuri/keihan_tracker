@@ -426,7 +426,7 @@ class ActiveTrainData(TrainData):
     active_direction:   Literal["up","down"] = Field(alias="direction")     # 方向（up:京都方面、down:大阪方面）
     active_destination: Optional[StationData] = Field(alias="destination")  # 行先駅（行先なし(00)ならNone）
     is_special:     bool            # 臨時か
-    station_arrival_time: Optional[datetime.datetime] = None # 現在の駅に停車した時刻
+    position_since: Optional[datetime.datetime] = None # 今の座標に来た時刻（位置情報のfileCreatedTime）。出現時は最初に観測した時刻
     has_premiumcar: Optional[bool] = None
     lastpass_station:   Optional[StationData] = None
     cars :          int             # 車両数
@@ -482,12 +482,17 @@ class ActiveTrainData(TrainData):
         return self.next_stop_station == self.start_station
 
     @property
-    def stopping_time(self) -> datetime.timedelta:
-        """列車が停車している時間。走行中はtimedelta(0)を返す。"""
-        if self.station_arrival_time:
-            return datetime.datetime.now(tz=JST) - self.station_arrival_time
-        else:
+    def staying_time(self) -> datetime.timedelta:
+        """
+        今の座標に留まっている時間。駅でも駅間でも、座標が変わらなければ増える。
+        - 最後に取得した位置情報の時点の値で、位置情報の作成時刻（fileCreatedTime）で測る。取得の間や、APIが止まっている間は増えない
+        - 座標は1駅あたり3マスと粗いため、走行中でも数分は増えることがある
+        - 出現した直後は、それより前に同じ座標にいた時間を含まない
+        """
+        position_list = self.master.train_position_list
+        if self.position_since is None or position_list is None:
             return datetime.timedelta(0)
+        return position_list.fileCreatedTime - self.position_since
     
     @property
     def line(self) -> LineLiteral:
@@ -836,11 +841,9 @@ class KHTracker:
                             tw = train.delayMinutesZhTw,
                             kr = train.delayMinutesKo
                         ),
-                        delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
+                        delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0,
+                        position_since = self.train_position_list.fileCreatedTime,
                         )
-                    if new_active_train.is_stopping:
-                        new_active_train.station_arrival_time = datetime.datetime.now(tz=JST)
-                    
                     self.trains[wdf] = new_active_train
 
                 elif type(self.trains[wdf]) == ActiveTrainData:
@@ -875,12 +878,9 @@ class KHTracker:
                     else:
                         active_train.lastpass_station = None
 
-                    # 停車時刻を算出
-                    if not active_train.is_stopping:
-                        active_train.station_arrival_time = None
-                    else:
-                        if old_coordinate != new_coordinate:
-                            active_train.station_arrival_time = datetime.datetime.now(tz=JST)
+                    # 座標が変わったら、今の座標に来た時刻を更新する
+                    if old_coordinate != new_coordinate:
+                        active_train.position_since = self.train_position_list.fileCreatedTime
 
         #ダイア情報を登録
         if self.starttime_list:
