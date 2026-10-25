@@ -238,7 +238,7 @@ class TrainData(BaseModel):
     def train_type(self) -> TrainType:
         """
         停車駅リストに基づいて列車種別を推定する
-        【注：ライナーは仕様上、快速急行または特急と判定される。】
+        【注：ライナーは停車駅から区別できないため、特急と判定される。樟葉始発のライナーは通勤快急と判定される。】
         """
         # アクティブ時のデータが残っているならそのまま返す
         if self.actual_train_type is not None:
