@@ -20,7 +20,7 @@ STARTTIME_PATH = "/zaisen-up/startTimeList.json"
 
 # (停車駅番号を停車順に "-" でつないだもの, 期待する種別)
 # 2026-10-06 のダイヤ（tests/fixtures/startTimeList.json.gz）から抽出
-# ライナーは停車駅から区別できないため、特急または快速急行として扱う
+# ライナーは停車駅から区別できないため、特急（樟葉始発は通勤快急）として扱う
 STOP_PATTERNS: list[tuple[str, TrainType]] = [
     # 普通
     ("1-2-3-4-5-6-7-8-9-10-11-12-13-14-15-16", TrainType.LOCAL),

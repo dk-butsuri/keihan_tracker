@@ -463,7 +463,7 @@ Yahoo!路線情報または駅すぱあとから取得した遅延情報モデ�
 | `TrainType.RAPID_LTD_EXP` | `"快速特急 洛楽"` |
 | `TrainType.EXTRA_TRAIN` | `"臨時列車"` |
 
-> **注**: ダイヤ上のデータからライナーを識別することは仕様上困難なため、`TrainData.train_type` では `LINER` ではなく `RAPID_EXP` または `LTD_EXP` と推定されます。`ActiveTrainData` ではAPIから正確な種別が返ります。
+> **注**: ダイヤ上のデータからライナーを識別することは仕様上困難なため、`TrainData.train_type` では `LINER` ではなく `LTD_EXP`（特急）と推定されます。樟葉始発のライナーは、停車駅が同じ `COMMUTER_RAPID_EXP`（通勤快急）と推定されます。`ActiveTrainData` ではAPIから正確な種別が返ります。
 
 ## 公式APIエンドポイント
 本ライブラリは以下の公開JSONを利用しています。
