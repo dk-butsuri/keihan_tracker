@@ -23,6 +23,9 @@ class BusStatePrms(BaseModel):
     @classmethod
     def from_string(cls, raw: str):
         parts = raw.split(":")
+        # 区切りの数が違えば形式が変わっている。IndexErrorではなくValueError（pydanticの検証エラー）にする
+        if len(parts) != 12:
+            raise ValueError(f"busstateprms の区切りが{len(parts)}個です（12個のはず）: {raw!r}")
         return cls(
             order=int(parts[0]),
             lat=float(parts[1]),
