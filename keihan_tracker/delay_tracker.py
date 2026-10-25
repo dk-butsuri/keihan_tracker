@@ -2,7 +2,6 @@ from pydantic import BaseModel, field_validator, BeforeValidator, Field
 from typing import Optional, Union, Annotated, List, Any
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from bs4 import BeautifulSoup as bs
 import asyncio
 import httpx
 import re
@@ -102,6 +101,11 @@ async def get_yahoo_delay(area:int=6) -> list[DelayLine]:
         "将来のバージョンで削除する可能性があります。",
         DeprecationWarning, stacklevel=2,
     )
+    try:
+        from bs4 import BeautifulSoup as bs
+    except ImportError as e:
+        raise ImportError("get_yahoo_delay には beautifulsoup4 が必要です。"
+                          "pip install keihan-tracker[delay] でインストールしてください。") from e
     async with httpx.AsyncClient() as crowler:
         html = await crowler.get(f"{BASE_URL}{area}")
 

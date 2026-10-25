@@ -56,8 +56,12 @@ pip install keihan-tracker
 - pydantic
 - httpx
 - tabulate
-- beautifulsoup4 (Yahoo!遅延情報取得に使用)
 - tzdata (タイムゾーン情報)
+
+非推奨の `get_yahoo_delay` を使う場合は、beautifulsoup4 も必要です。
+```bash
+pip install keihan-tracker[delay]
+```
 
 ## 使い方
 
@@ -201,7 +205,7 @@ if __name__ == "__main__":
 * Yahoo!路線情報 (スクレイピング)
 * 駅すぱあと 運行情報API（要契約）
 #### A. Yahoo!路線情報 (スクレイピング)
-関西エリア（デフォルト）の運行情報を取得します。 
+関西エリア（デフォルト）の運行情報を取得します。 `pip install keihan-tracker[delay]` で beautifulsoup4 をインストールしてください。
 
 **注：Yahoo!路線情報の運行情報は[二次利用を禁止しており](https://support.yahoo-net.jp/PccTransit/s/article/H000007493)、私的利用に限ります。**
 利用に際しては、[LINEヤフー共通利用規約](https://www.lycorp.co.jp/ja/company/terms/)も必ずご覧ください。

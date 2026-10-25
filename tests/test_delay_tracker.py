@@ -1,4 +1,5 @@
 import datetime
+import sys
 
 import httpx
 import pytest
@@ -48,3 +49,10 @@ def test_yahoo_deprecated(monkeypatch):
 
     with pytest.warns(DeprecationWarning, match="get_yahoo_delay"):
         assert run(get_yahoo_delay()) == []
+
+
+def test_yahoo_without_beautifulsoup(monkeypatch):
+    # beautifulsoup4 は任意インストール。無ければ、入れ方を示す ImportError になる
+    monkeypatch.setitem(sys.modules, "bs4", None)
+    with pytest.warns(DeprecationWarning), pytest.raises(ImportError, match=r"keihan-tracker\[delay\]"):
+        run(get_yahoo_delay())
