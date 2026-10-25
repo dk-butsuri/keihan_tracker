@@ -34,7 +34,10 @@ import re
 from zoneinfo import ZoneInfo
 
 JST = ZoneInfo("Asia/Tokyo")
-DATE_CHANGE_TIME = 5
+# 営業日が変わる時刻。終電（2時ごろまで）と、始発前に列車が現れる4時半ごろの間
+DATE_CHANGE_TIME = 4
+# 日付が変わったあと、ダイヤが今日のものだと確かめられなくても、取得のたびの取り直しをやめる時刻（安全装置）
+DIA_RETRY_DEADLINE = datetime.time(5, 30)
 
 
 class KeihanAPIError(ValueError):
@@ -625,6 +628,7 @@ class KHTracker:
         self.last_fetch_pos_datetime: Optional[datetime.datetime] = None # 最後にfetch_posを行った時刻
         self.last_regist_dia_datetime: Optional[datetime.datetime] = None # 最後にregist_diaでfetchした時刻
         self.last_regist_dia_date: Optional[datetime.date] = None
+        self.dia_confirmed_date: Optional[datetime.date] = None # ダイヤが今日のものだと確かめた営業日
         self.rate_limit_interval:float = rate_limit                      # アクセス間隔
         # 取得したレスポンスの保存先（Noneなら保存しない）
         self.snapshot_dir: Optional[Path] = Path(snapshot_dir) if snapshot_dir is not None else None
@@ -881,9 +885,15 @@ class KHTracker:
                         active_train.position_since = self.train_position_list.fileCreatedTime
 
         #ダイア情報を登録
+        # 始発前は、公式のダイヤがまだ前の日のままのことがある。日付が変わってから、
+        # ダイヤが今日のものだと確かめられるまでは、取得のたびに取り直す（DIA_RETRY_DEADLINE まで）
+        created = self.train_position_list.fileCreatedTime.time()
+        retry = (self.dia_confirmed_date != self.date
+                 and datetime.time(DATE_CHANGE_TIME) <= created < DIA_RETRY_DEADLINE)
         if self.starttime_list:
             need_download = (
-                self.last_regist_dia_datetime is None
+                retry
+                or self.last_regist_dia_datetime is None
                 or datetime.datetime.now(JST) - self.last_regist_dia_datetime > datetime.timedelta(hours=1)
                 or self.last_regist_dia_date != self.date
             )
@@ -893,6 +903,23 @@ class KHTracker:
                 await self.regist_dia(False)
         else:
             await self.regist_dia(True)
+        if self.dia_confirmed_date != self.date and self._dia_matches_positions():
+            self.dia_confirmed_date = self.date
+
+    def _dia_matches_positions(self) -> Optional[bool]:
+        """
+        走行中の列車の公式の行先と、ダイヤの終着駅が1本も食い違わないか。前の日のダイヤを使っていると食い違う。
+        比べられる列車（行先があり、ダイヤもある走行中の列車）がいなければ None。
+        """
+        checked = False
+        for train in self.active_trains.values():
+            if train.active_destination is None or not train.has_dia:
+                continue
+            final = next(stop.station for stop in train.route_stations if stop.is_final)
+            if final != train.active_destination:
+                return False
+            checked = True
+        return True if checked else None
 
     async def regist_dia(self, download:bool):
         "ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
