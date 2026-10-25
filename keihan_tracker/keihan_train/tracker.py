@@ -304,7 +304,12 @@ class TrainData(BaseModel):
                 return TrainType.LTD_EXP
             
             else:
-                # 鳥羽街道まで行かない短距離列車（例：出町柳～三条）
+                # 鳥羽街道をまたがない列車
+                # 始発から終着までの駅にすべて停車するなら普通（例：香里園～淀の臨時普通）
+                if all(self.master.stations[n] in stop_stations_list for n in range(min_num, max_num + 1)):
+                    return TrainType.LOCAL
+
+                # 鳥羽街道まで行かない京都側の短距離列車（例：出町柳～三条）
                 # 神宮丸太町(KH41)に停車するなら普通
                 if st_jingu_marutamachi in stop_stations_list:
                     return TrainType.LOCAL

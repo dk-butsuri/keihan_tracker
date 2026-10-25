@@ -166,7 +166,13 @@ PAST_STOP_PATTERNS: list[tuple[str, TrainType]] = [
     ("42-40-39-37-30-28-24-21", TrainType.LTD_EXP),
 ]
 
-ALL_STOP_PATTERNS = STOP_PATTERNS + PAST_STOP_PATTERNS
+# snapshot_dir で保存した 2026-10-07～25 のダイヤで、上の2つに無かった停車パターン
+SNAPSHOT_STOP_PATTERNS: list[tuple[str, TrainType]] = [
+    # 普通
+    ("18-19-20-21-22-23-24-25-26-27", TrainType.LOCAL),  # 香里園発淀行きの臨時普通（2026-10-25）
+]
+
+ALL_STOP_PATTERNS = STOP_PATTERNS + PAST_STOP_PATTERNS + SNAPSHOT_STOP_PATTERNS
 
 
 # ---------------------------------------------------------------- 公式の停車駅案内図
