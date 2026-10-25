@@ -3,7 +3,7 @@ import datetime
 import httpx
 import pytest
 
-from keihan_tracker import get_ekispert_delay
+from keihan_tracker import get_ekispert_delay, get_yahoo_delay
 from keihan_tracker.delay_tracker import JST, _announced_at
 
 from conftest import run
@@ -29,7 +29,7 @@ def test_ekispert_error_hides_api_key(monkeypatch):
     original = httpx.AsyncClient
     monkeypatch.setattr(httpx, "AsyncClient", lambda: original(transport=httpx.MockTransport(handler)))
 
-    with pytest.raises(httpx.HTTPStatusError) as e:
+    with pytest.raises(httpx.HTTPStatusError) as e, pytest.warns(DeprecationWarning):
         run(get_ekispert_delay("SECRET123"))
 
     assert requested[0].params["key"] == "SECRET123"
@@ -37,3 +37,14 @@ def test_ekispert_error_hides_api_key(monkeypatch):
     assert "SECRET123" not in str(e.value)
     assert "SECRET123" not in str(e.value.request.url)
     assert e.value.__cause__ is None and e.value.__suppress_context__
+
+
+def test_yahoo_deprecated(monkeypatch):
+    # 運行情報が無いときのページ（遅延の表が無い）
+    html = '<div class="elmTblLstLine trouble"></div>'
+    original = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda: original(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, text=html))))
+
+    with pytest.warns(DeprecationWarning, match="get_yahoo_delay"):
+        assert run(get_yahoo_delay()) == []
