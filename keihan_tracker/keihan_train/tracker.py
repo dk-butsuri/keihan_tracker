@@ -428,7 +428,6 @@ class ActiveTrainData(TrainData):
     is_special:     bool            # 臨時か
     position_since: Optional[datetime.datetime] = None # 今の座標に来た時刻（位置情報のfileCreatedTime）。出現時は最初に観測した時刻
     has_premiumcar: Optional[bool] = None
-    lastpass_station:   Optional[StationData] = None
     cars :          int             # 車両数
     delay_text:     MultiLang       # 遅延時間（テキスト）
 
@@ -871,12 +870,6 @@ class KHTracker:
                     at_terminal = active_train.is_at_station and active_train.next_station == active_train.destination
                     if not at_terminal:
                         active_train.active_direction = "up" if trainlist.trainDirection == 0 else "down"
-
-                    # lastPassStationを更新
-                    if train.lastPassStation != 99 and train.lastPassStation != 0:
-                        active_train.lastpass_station = self.stations[train.lastPassStation]
-                    else:
-                        active_train.lastpass_station = None
 
                     # 座標が変わったら、今の座標に来た時刻を更新する
                     if old_coordinate != new_coordinate:
