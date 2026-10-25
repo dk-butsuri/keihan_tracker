@@ -195,6 +195,31 @@ def test_find_trains(tracker):
     assert all(t.train_type == TrainType.LTD_EXP and t.direction == "up" for t in ltd)
 
 
+
+@pytest.mark.parametrize("direction", ["up", "down"])
+def test_find_trains_direction_includes_scheduled(tracker, direction):
+    """走行中でない列車も、始発・終着から推定した方向で絞り込む"""
+    found = tracker.find_trains(direction=direction)
+    assert all(t.direction == direction for t in found)
+    # status は実時刻で決まるため、走行中かどうかだけで分ける
+    not_active = [t for t in found if not isinstance(t, ActiveTrainData)]
+    assert not_active
+    assert len(not_active) < len([t for t in tracker.trains.values() if not isinstance(t, ActiveTrainData)])
+
+
+def test_find_trains_active_only_conditions_exclude_others(tracker):
+    """走行中の列車だけが持つ値を指定したら、走行中でない列車は当てはまらない"""
+    train = next(t for t in tracker.active_trains.values() if t.is_stopping is not None)
+    for found in [
+        tracker.find_trains(train_number=train.train_number),
+        tracker.find_trains(is_special=train.is_special),
+        tracker.find_trains(next_stop_station=train.next_stop_station),
+        tracker.find_trains(is_stopping=train.is_stopping),
+    ]:
+        assert train in found
+        assert all(isinstance(t, ActiveTrainData) for t in found)
+
+
 # ---------------------------------------------------------------- 状態の更新
 
 

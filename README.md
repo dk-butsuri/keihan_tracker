@@ -324,15 +324,15 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 |:---|:---|:---|
 | `status` | `"active" \| "scheduled" \| "completed"` | 運行状態。`status` 参照 |
 | `train_type` | `TrainType` | 列車種別 |
-| `direction` | `"up" \| "down"` | 進行方向（ActiveTrainData のみ有効） |
-| `is_special` | `bool` | 臨時列車かどうか（ActiveTrainData のみ有効） |
-| `train_number` | `str` | 列車番号（例: `"1051"`）（ActiveTrainData のみ有効） |
+| `direction` | `"up" \| "down"` | 進行方向。予定の列車は始発・終着から推定した方向 |
+| `is_special` | `bool` | 臨時列車かどうか（走行中の列車のみ。指定すると走行中でない列車は該当しない） |
+| `train_number` | `str` | 列車番号（例: `"1051"`）（走行中の列車のみ。指定すると走行中でない列車は該当しない） |
 | `has_premiumcar` | `bool` | プレミアムカー連結の有無 |
 | `destination` | `StationData` | 行先駅 |
-| `next_stop_station` | `StationData` | 次の停車駅（ActiveTrainData のみ有効） |
+| `next_stop_station` | `StationData` | 次の停車駅（走行中の列車のみ。指定すると走行中でない列車は該当しない） |
 | `min_delay` | `int` | この分数を**超える**遅延のみ対象 |
 | `max_delay` | `int` | この分数**未満**の遅延のみ対象 |
-| `is_stopping` | `bool` | 停車中かどうか（ActiveTrainData のみ有効。`is_stopping` が `None` の列車はどちらを指定しても該当しない） |
+| `is_stopping` | `bool` | 停車中かどうか（走行中の列車のみ。指定すると走行中でない列車は該当しない。`is_stopping` が `None` の列車はどちらを指定しても該当しない） |
 
 ### 列車データの構造 (TrainData と ActiveTrainData)
 
