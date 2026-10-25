@@ -13,6 +13,10 @@ INSTALL_REQUIRES = [
     "beautifulsoup4",
     "tzdata"
     ]
+# MCPサーバーは任意インストール（コア利用者に依存を強制しない）
+EXTRAS_REQUIRE = {
+    "mcp": ["mcp"],
+    }
 LICENSE = "MIT License"
 CLASSIFIERS = [
     "Programming Language :: Python :: 3",
@@ -42,6 +46,12 @@ setup(name=NAME,
       packages=find_packages(),
       python_requires=PYTHON_REQUIRES,
       install_requires=INSTALL_REQUIRES,
+      extras_require=EXTRAS_REQUIRE,
+      entry_points={
+          "console_scripts": [
+              "keihan-mcp = keihan_tracker_mcp:main",
+          ],
+      },
       license=LICENSE,
       classifiers=CLASSIFIERS,
       keywords=["keihan","train","parse","parsing","validation","tracking","position","京阪","鉄道","位置"],
