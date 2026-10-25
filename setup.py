@@ -49,4 +49,5 @@ setup(name=NAME,
           "Bug Tracker": "https://github.com/dk-butsuri/keihan_tracker/issues",
           "Source": "https://github.com/dk-butsuri/keihan_tracker",
       },
+      package_data={"keihan_tracker": ["py.typed"]}
     )
