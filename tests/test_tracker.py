@@ -213,21 +213,72 @@ def test_dia_not_redownloaded_within_an_hour(api, fresh_tracker):
     assert api.requests.count(STARTTIME_PATH) == 1
 
 
-def test_dia_redownloaded_once_when_date_changes(api, fresh_tracker):
-    """深夜帯に毎回取り直さず、5時に日付が変わったときだけ1回取り直す"""
-    for created in ["20261007040000", "20261007045900"]:
+def test_dia_not_redownloaded_at_night(api, fresh_tracker):
+    """深夜帯（日付が変わる4時より前）は、取得のたびにダイヤを取り直さない"""
+    for created in ["20261007020000", "20261007035900"]:
         api.set_json(POSITION_PATH, make_position_list(created))
         run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.date == datetime.date(2026, 10, 6)
     assert api.requests.count(STARTTIME_PATH) == 1
 
-    for created in ["20261007050000", "20261007050100"]:
+
+def _position_1096(created: str) -> dict:
+    """fixtureの1096（中書島付近を走行中、三条行き）だけがいる位置情報"""
+    data = load_fixture("trainPositionList.json")
+    loc = next(loc for loc in data["locationObjects"] if loc["trainInfoObjects"][0]["wdfBlockNo"] == "1096")
+    return make_position_list(created, [loc])
+
+
+# 前の日のダイヤ（1096が京橋止まり）と、今日のダイヤ（1096が三条行き）
+STALE_DIA = _start_time_list([_train_info(1096, [_dia("011", "-"), _dia("041", "04:40")])])
+TODAY_DIA = _start_time_list([_train_info(1096, [_dia("281", "-"), _dia("401", "04:50")])])
+
+
+def test_dia_retried_until_it_matches_positions(api, fresh_tracker):
+    """日付が変わってから、走行中の列車の行先とダイヤの終着駅が一致するまで、取得のたびに取り直す"""
+    api.set_json(STARTTIME_PATH, STALE_DIA)
+    api.set_json(POSITION_PATH, make_position_list("20261007030000"))
+    run(fresh_tracker.fetch_pos())
+    assert api.requests.count(STARTTIME_PATH) == 1
+
+    # 日付が変わった。列車がいないので確かめられず、毎回取り直す（変わっていなければ304）
+    for n, created in enumerate(["20261007040000", "20261007040100"], start=2):
         api.set_json(POSITION_PATH, make_position_list(created))
         run(fresh_tracker.fetch_pos())
-    assert fresh_tracker.date == datetime.date(2026, 10, 7)
+        assert fresh_tracker.date == datetime.date(2026, 10, 7)
+        assert api.requests.count(STARTTIME_PATH) == n
+
+    # 列車が現れたが、ダイヤはまだ前の日のもの（行先が食い違う）なので取り直し続ける
+    api.set_json(POSITION_PATH, _position_1096("20261007043100"))
+    run(fresh_tracker.fetch_pos())
+    assert api.requests.count(STARTTIME_PATH) == 4
+    assert fresh_tracker.dia_confirmed_date is None
+
+    # 公式のダイヤが今日のものに変わると、次の取得で追いつき、取り直しをやめる
+    api.set_json(STARTTIME_PATH, TODAY_DIA)
+    api.set_json(POSITION_PATH, _position_1096("20261007043200"))
+    run(fresh_tracker.fetch_pos())
+    assert api.requests.count(STARTTIME_PATH) == 5
+    assert fresh_tracker.trains[1096].stop_stations[-1].station.station_number == 40
+    assert fresh_tracker.dia_confirmed_date == datetime.date(2026, 10, 7)
+
+    api.set_json(POSITION_PATH, _position_1096("20261007043300"))
+    run(fresh_tracker.fetch_pos())
+    assert api.requests.count(STARTTIME_PATH) == 5
+
+
+def test_dia_retry_stops_at_deadline(api, fresh_tracker):
+    """確かめられなくても、5時半を過ぎたら取得のたびの取り直しをやめる（安全装置）"""
+    api.set_json(STARTTIME_PATH, STALE_DIA)
+    api.set_json(POSITION_PATH, _position_1096("20261007052900"))
+    run(fresh_tracker.fetch_pos())
+    run(fresh_tracker.fetch_pos())
     assert api.requests.count(STARTTIME_PATH) == 2
-    # 日付が変わってもダイヤのファイル自体は同じなので 304 になるが、新しい日付で登録し直される
-    assert all(t.date == datetime.date(2026, 10, 7) for t in fresh_tracker.trains.values())
-    assert fresh_tracker.trains[1].start_station is not None
+
+    api.set_json(POSITION_PATH, _position_1096("20261007053000"))
+    run(fresh_tracker.fetch_pos())
+    assert api.requests.count(STARTTIME_PATH) == 2
+    assert fresh_tracker.dia_confirmed_date is None
 
 
 def _expire_dia(tracker):
@@ -372,8 +423,8 @@ def test_direction_kept_while_stopping_at_terminal(api, fresh_tracker):
 @pytest.mark.parametrize(
     ("file_created_time", "expected_date"),
     [
-        ("20261007045959", datetime.date(2026, 10, 6)),  # 4時台は前日扱い
-        ("20261007050000", datetime.date(2026, 10, 7)),  # 5時から新しい日
+        ("20261007035959", datetime.date(2026, 10, 6)),  # 3時台は前日扱い
+        ("20261007040000", datetime.date(2026, 10, 7)),  # 4時から新しい日
         ("20261007000000", datetime.date(2026, 10, 6)),
     ],
 )

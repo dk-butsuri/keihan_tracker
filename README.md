@@ -307,7 +307,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `stations: dict[int, StationData]`: 駅データ。キーは駅番号の整数値（KH01なら1）。
 *   `trains: dict[int, TrainData | ActiveTrainData]`: 全列車データ（走行中・予定・終了含む）。キーは内部管理番号(WDF)。
 *   `active_trains: dict[int, ActiveTrainData]`: 現在走行中の列車データのみを抽出した辞書
-*   `date: datetime.date`: 現在の営業日（24-5時の深夜帯は前日扱い）
+*   `date: datetime.date`: 現在の営業日（0〜4時の深夜帯は前日扱い）
 *   `max_delay_train: Optional[ActiveTrainData]`: 最も遅延している列車（0分の場合はNoneを返す）
 *   `max_delay_minutes: int`: 現在の最大遅延分数
 *   `last_fetch_pos_datetime: Optional[datetime]`: 最後に `fetch_pos()` を実行した時刻
@@ -315,7 +315,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 
 #### 主要メソッド
 *   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。公式APIが壊れたデータを返すと `KeihanAPIError` を送出します。
-*   `async regist_dia(download: bool)`: ダイヤ情報を更新します。通常は `fetch_pos()` から自動的に呼び出されるため、実行する必要はありません。
+*   `async regist_dia(download: bool)`: ダイヤ情報を更新します。通常は `fetch_pos()` から自動的に呼び出される（1時間に1回取り直す。日付が変わった直後は、走行中の列車の行先とダイヤの終着駅が一致するまで、5時30分まで取得のたびに取り直す）ため、実行する必要はありません。
 *   `find_trains(...)`: 条件に合致する列車をリストで返します。全引数はオプションで、省略した項目は絞り込み対象外となります。
 
 `find_trains(...)` の引数：
@@ -354,7 +354,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 全ての列車のベースとなるクラスです。主にダイヤ情報（静的な予定）を保持します。
 *   `master`: KHTrackerインスタンス
 *   `wdfBlockNo: int`: 列車管理番号
-*   `date: datetime.date`: この列車が属する営業日。0〜5時の深夜帯は前日扱いとハードコーディングされています。
+*   `date: datetime.date`: この列車が属する営業日。0〜4時の深夜帯は前日扱いとハードコーディングされています。
 *   `destination: StationData`: 行先駅
 *   `start_station: StationData`: 始発駅。ダイヤに無い列車では `DiaNotFoundError` を送出します
 *   `has_dia: bool`: ダイヤ（停車駅・時刻）があるか
