@@ -195,11 +195,16 @@ class TrainData(BaseModel):
             return "京阪本線・鴨東線"
     
     @property
-    def direction(self) -> Literal["up","down"]:
+    def direction(self) -> Literal["up","down"] :
         """始発・終着駅から方向を推定する"""
         # アクティブ時のデータが残っているならそのまま返す
         if self.actual_direction is not None:
             return self.actual_direction
+
+        # ダイヤがなく、行先もない列車は存在しない
+        # 一度でもpositionに登場したならactual_directionには値が入る。ダイヤに登場したならdestinationにも値が入る
+        if self.destination is None:
+            raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] 行先が分からないため、方向を推定できません。")
 
         if self.line == "交野線":
             # 私市行きなら下り
@@ -235,7 +240,7 @@ class TrainData(BaseModel):
         # アクティブ時のデータが残っているならそのまま返す
         if self.actual_train_type is not None:
             return self.actual_train_type
-        if not self.has_dia:
+        if not self.has_dia or self.destination is None:
             raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] ダイヤに無い列車のため、種別を推定できません。")
 
         stop_stations_list = [stop.station for stop in self.stop_stations]
@@ -345,7 +350,7 @@ class TrainData(BaseModel):
         return station
 
     @property
-    def destination(self) -> StationData:
+    def destination(self) -> StationData|None:
         # アクティブ時のデータが残っているならそのまま返す
         if self.actual_destination is not None:
             return self.actual_destination
@@ -366,7 +371,7 @@ class TrainData(BaseModel):
             return "completed"
         # もし終着駅の予定時刻を過ぎていたらcompleted
         # 終着駅の時刻が不明なら、時刻が分かっている最後の停車駅で判定する
-        stop_time = self.get_stop_time(self.destination)
+        stop_time = self.get_stop_time(self.destination) if self.destination else None
         if stop_time is None:
             stop_time = next((stop.time for stop in reversed(self.stop_stations) if stop.time), None)
         if stop_time:
@@ -449,16 +454,32 @@ class ActiveTrainData(TrainData):
         return self.active_direction
 
     @property
-    def is_stopping(self) -> bool:
-        """列車が停車中かどうか"""
-        _, _, st2 = calc_position(self.location_col, self.location_row)
+    def is_stopping(self) -> Optional[bool]:
+        """列車が駅に停車中かどうか"""
+        next_stop = self.next_stop_station
+        if next_stop is None:
+            return None
+        _, st1, st2 = calc_position(self.location_col, self.location_row)
         # st2がなければ停車中
+        return st2 is None and st1 == next_stop.station_number
+
+    @property
+    def is_at_station(self) -> bool:
+        """列車が駅の位置座標にあるか"""
+        _, _, st2 = calc_position(self.location_col, self.location_row)
         return True if not st2 else False
     
     @property
-    def is_at_start_station(self) -> bool:
+    def is_at_start_station(self) -> Optional[bool]:
         """始発駅に停車中かどうか"""
-        return self.has_dia and self.is_stopping and self.next_stop_station == self.start_station
+        is_stopping = self.is_stopping
+        if is_stopping is None:
+            return None
+
+        if is_stopping is False:
+            return False
+        
+        return self.next_stop_station == self.start_station
 
     @property
     def stopping_time(self) -> datetime.timedelta:
@@ -844,7 +865,7 @@ class KHTracker:
 
                     # 方向を更新（出現直後の1分だけ誤った値になることがある）
                     # ただし終点に停車中は次の運行の向きに変わるため、そのままにする
-                    at_terminal = active_train.is_stopping and active_train.next_station == active_train.destination
+                    at_terminal = active_train.is_at_station and active_train.next_station == active_train.destination
                     if not at_terminal:
                         active_train.active_direction = "up" if trainlist.trainDirection == 0 else "down"
 

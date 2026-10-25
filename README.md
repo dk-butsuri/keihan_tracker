@@ -324,7 +324,7 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 | `next_stop_station` | `StationData` | 次の停車駅（ActiveTrainData のみ有効） |
 | `min_delay` | `int` | この分数を**超える**遅延のみ対象 |
 | `max_delay` | `int` | この分数**未満**の遅延のみ対象 |
-| `is_stopping` | `bool` | 停車中かどうか（ActiveTrainData のみ有効） |
+| `is_stopping` | `bool` | 停車中かどうか（ActiveTrainData のみ有効。`is_stopping` が `None` の列車はどちらを指定しても該当しない） |
 
 ### 列車データの構造 (TrainData と ActiveTrainData)
 
@@ -365,7 +365,8 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 
 #### ActiveTrainData (継承クラス)
 現在走行中の列車です。`TrainData` に加え、以下の**リアルタイム情報**を持ちます。
-*   `is_stopping: bool`: 現在、駅に停車中かどうか
+*   `is_stopping: Optional[bool]`: 現在、駅に停車中かどうか。駅の位置にいても、その駅を通過する場合は `False`。次の停車駅が分からない（ダイヤに無い列車など）ときは `None`
+*   `is_at_station: bool`: 駅の位置座標にいるかどうか。座標だけで判定するため、通過中でも `True` になる
 *   `next_stop_station: StationData`: 次に停車する駅（**停車中の場合はその駅**）
 *   `next_station: StationData`: 次に停車・**通過**する駅
 *   `destination: Optional[StationData]`: 行先駅。位置情報の行先が「00」（行先なし）のときはダイヤの終着駅、ダイヤも無ければ `None`
@@ -375,7 +376,7 @@ KHTracker(rate_limit: float = 15, snapshot_dir: str | Path | None = None)
 *   `cars: int`: 車両数
 *   `location_col`, `location_row`: zaisen上のグリッド座標
 *   `is_special: bool`: 臨時列車かどうか
-*   `is_at_start_station: bool`: 現在、始発駅に停車中かどうか（ダイヤに無い列車では常に `False`）
+*   `is_at_start_station: Optional[bool]`: 現在、始発駅に停車中かどうか（`is_stopping` が `None` のときは `None`）
 *   `stopping_time: datetime.timedelta`: 現在の駅に停車している時間。走行中は `timedelta(0)` を返す
 *   `lastpass_station: Optional[StationData]`: ⚠️ **使用非推奨**。基本的に停車中 or 次に停車する駅。公式zaisenページの列車詳細における停車時刻表示の開始基準として使われる内部値であり、「最後に通過した駅」として厳密に管理されているわけではありません。例えば萱島～京橋を走る各駅列車でも常に萱島が設定されるなど、路線・区間によって信頼性の低い値が返ります。
 
