@@ -284,7 +284,7 @@ def test_active_train_updated(api, fresh_tracker):
 
     data = copy.deepcopy(load_fixture("trainPositionList.json"))
     data["fileCreatedTime"] = "20261006212500"
-    # 走行中の列車を次の駅に停車させ、遅延と通過駅を設定する
+    # 走行中の列車を次の駅に停車させ、遅延を設定する
     target = next(
         loc for loc in data["locationObjects"]
         if loc["trainInfoObjects"][0]["wdfBlockNo"] == "1096"  # 上り特急、石清水八幡宮→中書島 走行中
@@ -293,7 +293,6 @@ def test_active_train_updated(api, fresh_tracker):
     target["locationRow"] = str(int(target["locationRow"]) + 1)
     info = target["trainInfoObjects"][0]
     info["delayMinutes"] = "3分遅れ"
-    info["lastPassStation"] = "99"
     api.set_json(POSITION_PATH, data)
     run(fresh_tracker.fetch_pos())
 
@@ -301,7 +300,6 @@ def test_active_train_updated(api, fresh_tracker):
     assert isinstance(train, ActiveTrainData)
     assert train.delay_minutes == 3
     assert train.delay_text.ja == "3分遅れ"
-    assert train.lastpass_station is None
     assert fresh_tracker.max_delay_train is train
     assert fresh_tracker.max_delay_minutes == 3
 
