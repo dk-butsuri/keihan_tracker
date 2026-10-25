@@ -665,12 +665,14 @@ class KHTracker:
         """
         条件に合致する列車を検索してリストで返します。
         - type: 列車種別（例: "普通"）
-        - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）
+        - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）。予定の列車は始発・終着から推定した方向
         - is_special: 臨時列車かどうか
         - train_number: 列車番号（例: "2201"）
         - has_premiumcar: プレミアムカー付きかどうか
         - destination: 行き先駅
         - next_stop_station: 次の停車駅 or 停車中の駅
+        is_special・train_number・next_stop_station・is_stopping は走行中の列車だけが持つ値のため、
+        指定すると走行中でない列車は当てはまりません。
         """
         trains: list[TrainData|ActiveTrainData] = []
         for train in self.trains.values():
@@ -687,19 +689,23 @@ class KHTracker:
                 continue
             if max_delay is not None    and train.delay_minutes >= max_delay:
                 continue
+            if direction is not None    and train.direction != direction:
+                continue
 
-            if isinstance(train, ActiveTrainData):
-                if next_stop_station and train.next_stop_station != next_stop_station:
+            # 以下は走行中の列車だけが持つ値。指定されたら、走行中でない列車は当てはまらない
+            active_only = (next_stop_station, is_special, train_number, is_stopping)
+            if not isinstance(train, ActiveTrainData):
+                if any(v is not None for v in active_only):
                     continue
-                if direction and train.direction != direction:
+            else:
+                if next_stop_station is not None and train.next_stop_station != next_stop_station:
                     continue
                 if is_special is not None and train.is_special != is_special:
                     continue
-                if train_number and train.train_number != train_number:
+                if train_number is not None and train.train_number != train_number:
                     continue
-                if is_stopping != None:
-                    if train.is_stopping != is_stopping:
-                        continue
+                if is_stopping is not None and train.is_stopping != is_stopping:
+                    continue
             
             trains.append(train)
         return trains
