@@ -609,7 +609,7 @@ class KHTracker:
     - fetch_pos, fetch_dia でAPIから最新情報取得
     - snapshot_dir を指定すると、取得したAPIレスポンスをそのまま保存する（デバッグ用）
     """
-    def __init__(self, rate_limit:float = 15, snapshot_dir: Optional[str | Path] = None) -> None:
+    def __init__(self, rate_limit:float = 30, snapshot_dir: Optional[str | Path] = None) -> None:
         #パースしたJSONデータ（BaseModel）
         self.transfer_guide_info: Optional[TransferGuideInfo] = None # 駅ごとの乗り入れデータ
         self.select_station: Optional[SelectStation] = None          # 路線ごとの駅名データ
