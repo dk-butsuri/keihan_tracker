@@ -58,6 +58,22 @@ def _parse(model: type[_Model], text: str, url: str) -> _Model:
         raise KeihanAPIError(f"{url} を読み込めませんでした: {e}") from e
 
 
+def _parse_delay_minutes(text: str) -> int:
+    """
+    delayMinutes（"3分遅れ"、"2時間以上"、""）を分に直す。
+    120分以上の遅れは "2時間以上" としか来ないので、下限の120分とする。
+    見たことのない表記は、取得を止めないよう警告を出して0とする。
+    """
+    if text == "":
+        return 0
+    if text == "2時間以上":
+        return 120
+    if m := re.fullmatch(r"(\d+)分遅れ", text):
+        return int(m[1])
+    warnings.warn(f"遅延の表記を読めませんでした: {text!r}")
+    return 0
+
+
 class DiaNotFoundError(ValueError):
     """
     列車のダイヤ（startTimeList）が無いため、ダイヤから求める情報が分からないことを表す例外。
@@ -855,7 +871,7 @@ class KHTracker:
                             tw = train.delayMinutesZhTw,
                             kr = train.delayMinutesKo
                         ),
-                        delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0,
+                        delay_minutes = _parse_delay_minutes(train.delayMinutes),
                         position_since = self.train_position_list.fileCreatedTime,
                         )
                     self.trains[wdf] = new_active_train
@@ -874,7 +890,7 @@ class KHTracker:
                         tw = train.delayMinutesZhTw,
                         kr = train.delayMinutesKo
                     )
-                    active_train.delay_minutes = int(re.sub(r"\D","",train.delayMinutes)) if train.delayMinutes != "" else 0
+                    active_train.delay_minutes = _parse_delay_minutes(train.delayMinutes)
 
                     # 行先を更新（運転整理で変わることがある）。行先なし(00)の間は直前の値を保つ
                     if train.destStationNumber in self.stations:
