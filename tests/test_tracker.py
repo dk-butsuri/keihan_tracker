@@ -4,7 +4,7 @@ import datetime
 import pytest
 
 from keihan_tracker import ActiveTrainData, DiaNotFoundError, StationData, TrainData, TrainType
-from keihan_tracker.keihan_train.tracker import JST
+from keihan_tracker.keihan_train.tracker import JST, _parse_delay_minutes
 
 from conftest import load_fixture, make_position_list, make_tracker, run
 
@@ -355,7 +355,11 @@ def test_train_disappears_then_inactivated(api, fresh_tracker):
     assert train.direction == "up"
 
 
-def test_active_train_updated(api, fresh_tracker):
+@pytest.mark.parametrize(
+    ("delay_text", "delay_minutes"),
+    [("3分遅れ", 3), ("2時間以上", 120)],  # 2時間以上は2026-10-30の京阪本線停電で実際に来た表示
+)
+def test_active_train_updated(api, fresh_tracker, delay_text, delay_minutes):
     run(fresh_tracker.fetch_pos())
 
     data = copy.deepcopy(load_fixture("trainPositionList.json"))
@@ -368,16 +372,30 @@ def test_active_train_updated(api, fresh_tracker):
     assert not fresh_tracker.trains[1096].is_stopping
     target["locationRow"] = str(int(target["locationRow"]) + 1)
     info = target["trainInfoObjects"][0]
-    info["delayMinutes"] = "3分遅れ"
+    info["delayMinutes"] = delay_text
     api.set_json(POSITION_PATH, data)
     run(fresh_tracker.fetch_pos())
 
     train = fresh_tracker.trains[1096]
     assert isinstance(train, ActiveTrainData)
-    assert train.delay_minutes == 3
-    assert train.delay_text.ja == "3分遅れ"
+    assert train.delay_minutes == delay_minutes
+    assert train.delay_text.ja == delay_text
     assert fresh_tracker.max_delay_train is train
-    assert fresh_tracker.max_delay_minutes == 3
+    assert fresh_tracker.max_delay_minutes == delay_minutes
+
+
+@pytest.mark.parametrize(
+    ("delay_text", "delay_minutes"),
+    [("", 0), ("3分遅れ", 3), ("119分遅れ", 119), ("2時間以上", 120)],
+)
+def test_parse_delay_minutes(delay_text, delay_minutes):
+    assert _parse_delay_minutes(delay_text) == delay_minutes
+
+
+@pytest.mark.parametrize("delay_text", ["遅延", "3時間以上", "約3分遅れ"])
+def test_parse_delay_minutes_unknown_warns(delay_text):
+    with pytest.warns(UserWarning, match="遅延の表記"):
+        assert _parse_delay_minutes(delay_text) == 0
 
 
 def test_staying_time(api, fresh_tracker):
