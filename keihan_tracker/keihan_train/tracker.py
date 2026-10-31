@@ -25,6 +25,7 @@ from typing import Optional, Literal, Sequence, TypeVar
 from httpx import AsyncClient, Response
 from pathlib import Path
 import asyncio
+import dataclasses
 import gzip
 import json
 import xml.etree.ElementTree as ET
@@ -134,9 +135,8 @@ class StationData(BaseModel):
                 stop_stations = [s.station for s in train.stop_stations]
                 if stop_stations.index(self) >= stop_stations.index(train.next_stop_station):
                     trains.append((train,stop))
-            else:
-                if self in [s.station for s in train.stop_stations] and train.status == "scheduled":
-                    trains.append((train,stop))
+            elif train._may_stop_after_observation_began(stop):
+                trains.append((train,stop))
 
         # 時刻不明の停車は後ろに回す
         trains.sort(key=lambda x:x[1].time or datetime.datetime.max.replace(tzinfo=JST))
@@ -157,10 +157,12 @@ class StationData(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
-class TrainHistoryRecord(BaseModel, frozen=True):
+@dataclasses.dataclass(frozen=True, slots=True)
+class TrainHistoryRecord:
     """
-    走行中の列車の、ある位置情報の時点での値。ActiveTrainData.history の1件。
+    走行中の列車の、ある位置情報の時点での値。TrainData.history の1件。
     fetch_pos で更新した後の値なので、最新の1件は列車の今の値と一致する。
+    1日分を残すため、軽い dataclass にしている（BaseModel の8分の1ほど）。
     """
     file_created_time:  datetime.datetime           # その位置情報の fileCreatedTime（取得した時刻ではない）
     location_col:       int
@@ -209,8 +211,9 @@ class TrainData(BaseModel):
     has_premiumcar: Optional[bool]
     train_formation: Optional[int]
     route_stations: list[StopStationData] = Field(default_factory=list)      # 経路にある駅リスト
-    is_completed:bool = False # Falseは必ずしも運行前、運行中であるとは限らない
     delay_minutes: int = 0
+    # その日、走っている間の位置情報ごとの値（古い順）。走り終えた後も残り、また走り出すと続きから加える
+    history: list[TrainHistoryRecord] = Field(default_factory=list)
     # 以下はActiveだった時のデータを保持する変数
     actual_train_type: Optional[TrainType] = None
     actual_direction: Optional[Literal["up","down"]] = None
@@ -412,21 +415,29 @@ class TrainData(BaseModel):
         return station
     
     @property
-    def status(self) -> Literal["active","scheduled","completed"]:
-        """運行情報を推定します。completed/scheduledの精度は保証されません。"""
-        if isinstance(self, ActiveTrainData):
-            return "active"
-        if self.is_completed == True:
-            return "completed"
-        # もし終着駅の予定時刻を過ぎていたらcompleted
-        # 終着駅の時刻が不明なら、時刻が分かっている最後の停車駅で判定する
-        stop_time = self.get_stop_time(self.destination) if self.destination else None
-        if stop_time is None:
-            stop_time = next((stop.time for stop in reversed(self.stop_stations) if stop.time), None)
-        if stop_time:
-            if stop_time < datetime.datetime.now(JST):
-                return "completed"
-        return "scheduled"
+    def was_active(self) -> bool:
+        """
+        その日、走っているのを観測したことがあるか。走行中の列車も True。
+        運行を終えたことは保証しない（止まったまま位置情報から消えることがある）。
+        """
+        return bool(self.history)
+
+    def _may_stop_after_observation_began(self, stop: StopStationData) -> bool:
+        """
+        走っていない列車が、これから stop に停車するかもしれないか（upcoming_trains 用）。
+        走っているのを観測したことがあれば、もう停車しない。
+        その営業日に最初に位置情報を取れた時刻より前に停車する予定なら、観測を始める前に停車したとみなす。
+        stop の時刻が不明なら、その後の時刻が分かっている停車駅で判定する。どれも不明なら停車するかもしれないとする。
+        """
+        if self.was_active:
+            return False
+        began = self.master._first_observed_time
+        if began is None:
+            return True
+        stops = self.stop_stations
+        later = stops[stops.index(stop):]
+        time = next((s.time for s in later if s.time), None)
+        return time is None or time > began
 
     # 停車駅リスト
     @property
@@ -483,9 +494,6 @@ class ActiveTrainData(TrainData):
     # サイト上で列車位置を表示するときのグリッド座標
     location_col: int
     location_row: int
-
-    # 走行中の間の、位置情報ごとの値（古い順）。運行を終えて TrainData に戻ると消える
-    history: list[TrainHistoryRecord] = Field(default_factory=list)
 
     def _record_history(self, file_created_time: datetime.datetime) -> None:
         """今の値を history に加える。同じ位置情報を取り直したときは加えない"""
@@ -653,7 +661,7 @@ class ActiveTrainData(TrainData):
             has_premiumcar=self.has_premiumcar,
             train_formation=self.train_formation,
             route_stations=self.route_stations,
-            is_completed=True,
+            history=self.history,
             date=self.date
         )
         return train
@@ -686,6 +694,8 @@ class KHTracker:
         self.last_regist_dia_datetime: Optional[datetime.datetime] = None # 最後にregist_diaでfetchした時刻
         self.last_regist_dia_date: Optional[datetime.date] = None
         self.dia_confirmed_date: Optional[datetime.date] = None # ダイヤが今日のものだと確かめた営業日
+        self._first_observed_date: Optional[datetime.date] = None
+        self._first_observed_time: Optional[datetime.datetime] = None # その営業日に最初に位置情報を取れた時刻（fileCreatedTime）
         self.rate_limit_interval:float = rate_limit                      # アクセス間隔
         # 取得したレスポンスの保存先（Noneなら保存しない）
         self.snapshot_dir: Optional[Path] = Path(snapshot_dir) if snapshot_dir is not None else None
@@ -707,7 +717,7 @@ class KHTracker:
 
     def find_trains(
             self, 
-            status: Optional[Literal['active', 'scheduled', 'completed']] = None,
+            active:         Optional[bool] = None,
             train_type:           Optional[TrainType] = None, 
             direction:      Optional[Literal["up","down"]] = None, 
             is_special:     Optional[bool] = None, 
@@ -721,6 +731,7 @@ class KHTracker:
             ) -> Sequence[TrainData]:
         """
         条件に合致する列車を検索してリストで返します。
+        - active: 走行中か
         - type: 列車種別（例: "普通"）
         - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）。予定の列車は始発・終着から推定した方向
         - is_special: 臨時列車かどうか
@@ -734,7 +745,7 @@ class KHTracker:
         trains: list[TrainData|ActiveTrainData] = []
         for train in self.trains.values():
             # 条件に合致するかチェック
-            if status is not None       and status != train.status:
+            if active is not None       and isinstance(train, ActiveTrainData) != active:
                 continue
             if train_type is not None   and train.train_type != train_type:
                 continue
@@ -898,6 +909,9 @@ class KHTracker:
             self.date = self.train_position_list.fileCreatedTime.date() - datetime.timedelta(days=1)
         else:
             self.date = self.train_position_list.fileCreatedTime.date()
+        if self._first_observed_date != self.date:
+            self._first_observed_date = self.date
+            self._first_observed_time = self.train_position_list.fileCreatedTime
 
         # 前日の列車があれば削除
         old_wdfs: list[int] = []
@@ -927,8 +941,11 @@ class KHTracker:
                 wdf = train.wdfBlockNo
                 # 存在しない/アクティブでないなら新規作成
                 if self.trains.get(wdf) == None or not isinstance(self.trains.get(wdf), ActiveTrainData):
+                    # 一度消えてまた走り出した列車は、それまでの履歴を引き継ぐ
+                    old = self.trains.get(wdf)
                     new_active_train = ActiveTrainData(
                         master=self, 
+                        history = old.history if old else [],
                         wdfBlockNo=wdf,
                         date=self.date,
                         train_number = train.trainNumber,

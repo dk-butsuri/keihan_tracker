@@ -187,10 +187,14 @@ def test_midnight_time_is_next_day(tracker):
 
 
 def test_find_trains(tracker):
-    active = tracker.find_trains(status="active")
+    active = tracker.find_trains(active=True)
     assert len(active) == len(tracker.active_trains)
+    not_active = tracker.find_trains(active=False)
+    assert not_active
+    assert not any(isinstance(t, ActiveTrainData) for t in not_active)
+    assert len(active) + len(not_active) == len(tracker.trains)
 
-    ltd = tracker.find_trains(status="active", train_type=TrainType.LTD_EXP, direction="up")
+    ltd = tracker.find_trains(active=True, train_type=TrainType.LTD_EXP, direction="up")
     assert ltd
     assert all(t.train_type == TrainType.LTD_EXP and t.direction == "up" for t in ltd)
 
@@ -201,7 +205,6 @@ def test_find_trains_direction_includes_scheduled(tracker, direction):
     """走行中でない列車も、始発・終着から推定した方向で絞り込む"""
     found = tracker.find_trains(direction=direction)
     assert all(t.direction == direction for t in found)
-    # status は実時刻で決まるため、走行中かどうかだけで分ける
     not_active = [t for t in found if not isinstance(t, ActiveTrainData)]
     assert not_active
     assert len(not_active) < len([t for t in tracker.trains.values() if not isinstance(t, ActiveTrainData)])
@@ -349,7 +352,7 @@ def test_train_disappears_then_inactivated(api, fresh_tracker):
     assert fresh_tracker.active_trains == {}
     train = fresh_tracker.trains[1099]
     assert type(train) is TrainData
-    assert train.status == "completed"
+    assert train.was_active
     # アクティブ時の種別・方向が保持される
     assert train.train_type == TrainType.LINER
     assert train.direction == "up"
@@ -464,10 +467,33 @@ def test_history_recorded(api, fresh_tracker):
     assert train.history[-1].location_row == train.location_row
     assert train.history[0].location_row == train.location_row - 1
 
-    # 運行を終えて TrainData に戻ると消える
+    # 運行を終えて TrainData に戻っても残る
     api.set_json(POSITION_PATH, make_position_list("20261006212600"))
     run(fresh_tracker.fetch_pos())
-    assert not hasattr(fresh_tracker.trains[1096], "history")
+    train = fresh_tracker.trains[1096]
+    assert type(train) is TrainData
+    assert [r.delay_minutes for r in train.history] == [0, 2]
+
+    # 消えてまた走り出すと、続きから加える
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212700", "5分遅れ", row_offset=1))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    assert isinstance(train, ActiveTrainData)
+    assert [r.delay_minutes for r in train.history] == [0, 2, 5]
+
+
+def test_was_active(api, fresh_tracker):
+    run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.trains[1096].was_active  # 走行中も True
+    never = [t for t in fresh_tracker.trains.values() if not isinstance(t, ActiveTrainData)]
+    assert never
+    assert not any(t.was_active for t in never)
+
+    api.set_json(POSITION_PATH, make_position_list("20261006213000"))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    assert type(train) is TrainData
+    assert train.was_active
 
 
 @pytest.mark.parametrize(
@@ -641,8 +667,49 @@ def test_regist_dia_stop_with_unknown_time(api, fresh_tracker):
     assert train.destination.station_number == 42
     assert train.get_stop_time(fresh_tracker.stations[17]) is None
     assert train.train_type == TrainType.SUB_EXP
-    # 終着駅の時刻が不明でも、時刻が分かっている最後の停車駅（萱島 12:15）で判定する
-    assert train.status == "completed"
+    # 最初に位置情報を取れたのは12:00。それより後に停車する予定の駅の発車標に出る
+    assert train in [t for t, _ in fresh_tracker.stations[16].upcoming_trains]  # 萱島 12:15
+    assert train in [t for t, _ in fresh_tracker.stations[17].upcoming_trains]  # 時刻不明で、その先も不明
+
+
+def test_upcoming_trains_excludes_trains_before_observation(api, fresh_tracker):
+    """
+    走っていない列車は、その営業日に最初に位置情報を取れた時刻より後に停車する予定なら、発車標に出る。
+    時刻不明の駅は、その先の時刻が分かっている停車駅で判定する。
+    """
+    dias = [_dia("011", "-"), _dia("021", "12:01"), _dia("032", "99:99"), _dia("041", "12:05"), _dia("111", "12:10")]
+    api.set_json(STARTTIME_PATH, _start_time_list([_train_info(1, dias)]))
+    api.set_json(POSITION_PATH, make_position_list("20261006120300"))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1]
+    stations = fresh_tracker.stations
+
+    def upcoming(n):
+        return train in [t for t, _ in stations[n].upcoming_trains]
+
+    assert not upcoming(2)  # 12:01
+    assert upcoming(3)      # 時刻不明。その先の12:05で判定する
+    assert upcoming(4)      # 12:05
+    assert upcoming(11)     # 12:10
+
+    # 後の位置情報で時刻を過ぎても、最初に位置情報を取れた時刻で判定する（遅れて来るかもしれない）
+    api.set_json(POSITION_PATH, make_position_list("20261006123000"))
+    run(fresh_tracker.fetch_pos())
+    assert upcoming(4)
+
+
+def test_upcoming_trains_excludes_was_active(api, fresh_tracker):
+    """走っているのを観測した列車は、走り終えたらどの駅の発車標にも出ない"""
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    final = train.stop_stations[-1].station
+    assert train in [t for t, _ in final.upcoming_trains]
+
+    api.set_json(POSITION_PATH, make_position_list("20261006213000"))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    assert type(train) is TrainData
+    assert train not in [t for t, _ in final.upcoming_trains]
 
 
 def test_upcoming_trains_with_unknown_time(api, fresh_tracker):
@@ -725,7 +792,7 @@ def test_inactivated_train_without_dia(api, no_dia_tracker):
     train = tracker.trains[NO_DIA_WDF]
     assert type(train) is TrainData
     assert not train.has_dia
-    assert train.status == "completed"
+    assert train.was_active
     assert train.train_type == TrainType.LOCAL
     assert train.destination is tracker.stations[77]
     assert train.direction == "down"

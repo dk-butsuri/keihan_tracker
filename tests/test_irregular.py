@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from keihan_tracker import ActiveTrainData, KeihanAPIError
+from keihan_tracker import ActiveTrainData, KeihanAPIError, TrainData
 
 from conftest import load_fixture, load_fixture_bytes, make_position_list, run
 
@@ -109,7 +109,8 @@ def test_dest_none_without_dia(api, fresh_tracker):
     run(fresh_tracker.fetch_pos())
     assert fresh_tracker.active_trains == {}
     for wdf in trains:
-        assert fresh_tracker.trains[wdf].status == "completed"
+        assert type(fresh_tracker.trains[wdf]) is TrainData
+        assert fresh_tracker.trains[wdf].was_active
 
 
 # ---------------------------------------------------------------- 壊れたJSON

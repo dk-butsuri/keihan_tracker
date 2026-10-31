@@ -324,7 +324,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 
 | 引数 | 型 | 説明 |
 |:---|:---|:---|
-| `status` | `"active" \| "scheduled" \| "completed"` | 運行状態。`status` 参照 |
+| `active` | `bool` | 走行中か（`ActiveTrainData` か） |
 | `train_type` | `TrainType` | 列車種別 |
 | `direction` | `"up" \| "down"` | 進行方向。予定の列車は始発・終着から推定した方向 |
 | `is_special` | `bool` | 臨時列車かどうか（走行中の列車のみ。指定すると走行中でない列車は該当しない） |
@@ -368,8 +368,8 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `train_type: TrainType`: **[推定]** 停車駅パターンから推定された種別
 *   `direction: Literal["up","down"]`: **[推定]** 始発・終着から推定された方向
 *   `line: LineLiteral`: **[推定]** 列車の走行路線（"京阪本線・鴨東線", "宇治線" など）
-*   `status: Literal["active","scheduled","completed"]`: 運行状態。**`"active"` のみ正確**。`"scheduled"` / `"completed"` はダイヤ上の予定時刻から推定するため精度は保証されません。`find_trains(status="active")` などと組み合わせて使います。
-*   `is_completed: bool`: 運行完了フラグ。`status` 同様、精度は保証されません。
+*   `history: list[TrainHistoryRecord]`: その日、走っている間の位置情報ごとの値（古い順）。走行中なら最新の1件は今の値と一致します。運行を終えて `TrainData` に戻っても残り、一度消えた列車がまた走り出すと続きから加わります
+*   `was_active: bool`: その日、走っているのを観測したことがあるか（`history` が空でないか）。走行中の列車も `True` です。運行を終えたことは保証しません（止まったまま位置情報から消えることがあります）。観測を始める前に走った列車や、取得が途切れていた間に走った列車は `False` です
 
 なお、`ActiveTrainData` が運行終了後に `TrainData` に降格した際、`direction`・`train_type`・`destination`・`line` は引き継がれます。
 
@@ -389,7 +389,6 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `is_at_start_station: Optional[bool]`: 現在、始発駅に停車中かどうか（`is_stopping` が `None` のときは `None`）
 *   `staying_time: datetime.timedelta`: 今の座標に留まっている時間。駅でも駅間でも、座標が変わらなければ増える。最後に取得した位置情報の作成時刻で測るため、取得の間やAPIが止まっている間は増えない。座標が粗いため走行中でも数分は増えることがあり、出現直後はそれ以前の時間を含まない
 *   `position_since: Optional[datetime.datetime]`: 今の座標に来た時刻（位置情報の作成時刻）
-*   `history: list[TrainHistoryRecord]`: 走行中の間の、位置情報ごとの値（古い順）。最新の1件は今の値と一致します。運行を終えて `TrainData` に戻ると消えます
 
 ### StationData
 駅を表すクラス。
@@ -400,6 +399,8 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `transfer: StationConnections`: 乗換情報。JR・地下鉄・モノレールなどへの乗り入れ路線を保持します。
 *   `arriving_trains: list[ActiveTrainData]`: 停車中、もしくは**次に**停車する走行中列車のリスト
 *   `upcoming_trains: list[tuple[TrainData | ActiveTrainData, StopStationData]]`: 停車中、もしくは**今後**停車する全列車とその到着時刻のリスト（時刻順）。
+    *   走行中の列車は、停車駅の並びで次の停車駅以降にこの駅があれば含みます。
+    *   走行中でない列車は、`was_active` でなく、この駅の予定時刻が、その営業日に最初に位置情報を取れた時刻より後なら含みます（時刻不明なら、その先の時刻が分かっている停車駅で判定し、どれも不明なら含みます）。予定時刻を過ぎても、走り出さないかぎり含み続けます。運転見合わせ中は遅れて来るかもしれず、運休になったかは公式データから分からないためです。予定時刻をどれだけ過ぎたら出さないかは、使う側で決めてください。
 *   `trains: list[tuple[TrainData | ActiveTrainData, StopStationData]]`: **過去・現在・未来すべて**の停車列車リスト（時刻順）。`upcoming_trains` が「これから停車する列車」のみを返すのに対し、こちらはすでに通過済みの列車も含みます。発車標ではなく運行履歴や全停車情報が必要な場合に使用します。
 
 いずれもダイヤの停車駅から探すため、ダイヤに無い列車（`has_dia` が `False`）は含まれません。
@@ -413,7 +414,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
    * is_final: bool: この駅が終着駅かどうか
 
 ### TrainHistoryRecord
-走行中の列車の、ある位置情報の時点での値です。`ActiveTrainData.history` の1件です。
+走行中の列車の、ある位置情報の時点での値です。`TrainData.history` の1件です。1日分を残すため、`BaseModel` ではなく `dataclass`（`frozen=True, slots=True`）です。
    * file_created_time: datetime: その位置情報の作成時刻（`fileCreatedTime`。取得した時刻ではありません）
    * location_col, location_row: int: 座標
    * delay_minutes: int: 遅延分数
