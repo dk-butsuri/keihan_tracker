@@ -318,6 +318,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。公式APIが壊れたデータを返すと `KeihanAPIError` を送出します。
 *   `async regist_dia(download: bool)`: ダイヤ情報を更新します。通常は `fetch_pos()` から自動的に呼び出される（1時間に1回取り直す。日付が変わった直後は、走行中の列車の行先とダイヤの終着駅が一致するまで、5時30分まで取得のたびに取り直す）ため、実行する必要はありません。
 *   `find_trains(...)`: 条件に合致する列車をリストで返します。全引数はオプションで、省略した項目は絞り込み対象外となります。
+*   `delay_growing_trains(line=None, window=timedelta(minutes=5), ratio=0.9)`: 遅延が経過時間とほぼ同じ速さで増えている走行中の列車を返します。`window` 以上前の位置情報の時点と比べて、遅延の増えが経過時間の `ratio` 倍以上の列車です。止まっている列車は待たされた時間がそのまま遅延になるため当てはまりやすく、運行が止まっているかの手がかりになります。始発駅に停車中の列車と、出現してから `window` が経っていない列車は含みません。実際に止まったときに当てはまった本数は、[信頼性ドキュメント](https://github.com/dk-butsuri/keihan_tracker/blob/main/docs/RELIABILITY.md#運行が止まったとき)にあります。
 
 `find_trains(...)` の引数：
 
@@ -388,6 +389,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `is_at_start_station: Optional[bool]`: 現在、始発駅に停車中かどうか（`is_stopping` が `None` のときは `None`）
 *   `staying_time: datetime.timedelta`: 今の座標に留まっている時間。駅でも駅間でも、座標が変わらなければ増える。最後に取得した位置情報の作成時刻で測るため、取得の間やAPIが止まっている間は増えない。座標が粗いため走行中でも数分は増えることがあり、出現直後はそれ以前の時間を含まない
 *   `position_since: Optional[datetime.datetime]`: 今の座標に来た時刻（位置情報の作成時刻）
+*   `history: list[TrainHistoryRecord]`: 走行中の間の、位置情報ごとの値（古い順）。最新の1件は今の値と一致します。運行を終えて `TrainData` に戻ると消えます
 
 ### StationData
 駅を表すクラス。
@@ -409,6 +411,16 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
    * is_stop: bool: 停車するかどうか（通過駅ならFalse）
    * is_start: bool: この駅が始発駅かどうか
    * is_final: bool: この駅が終着駅かどうか
+
+### TrainHistoryRecord
+走行中の列車の、ある位置情報の時点での値です。`ActiveTrainData.history` の1件です。
+   * file_created_time: datetime: その位置情報の作成時刻（`fileCreatedTime`。取得した時刻ではありません）
+   * location_col, location_row: int: 座標
+   * delay_minutes: int: 遅延分数
+   * direction: Literal["up","down"]: 方向
+   * destination: Optional[StationData]: 行先駅
+   * line: LineLiteral: その時点で走っていた路線
+   * is_at_station: bool: その時点で駅の位置座標にいたか
 
 ### BusLocationResponse / BusStatePrms (バス)
 バス接近情報のレスポンスモデル。

@@ -157,6 +157,31 @@ class StationData(BaseModel):
     model_config = {"arbitrary_types_allowed": True}
 
 
+class TrainHistoryRecord(BaseModel, frozen=True):
+    """
+    走行中の列車の、ある位置情報の時点での値。ActiveTrainData.history の1件。
+    fetch_pos で更新した後の値なので、最新の1件は列車の今の値と一致する。
+    """
+    file_created_time:  datetime.datetime           # その位置情報の fileCreatedTime（取得した時刻ではない）
+    location_col:       int
+    location_row:       int
+    delay_minutes:      int
+    direction:          Literal["up","down"]
+    destination:        Optional[StationData]       # 行先駅（行先なし(00)の間は直前の値）
+
+    @property
+    def line(self) -> LineLiteral:
+        """その時点で走っていた路線"""
+        line, _, _ = calc_position(self.location_col, self.location_row)
+        return line
+
+    @property
+    def is_at_station(self) -> bool:
+        """その時点で駅の位置座標にいたか"""
+        _, _, st2 = calc_position(self.location_col, self.location_row)
+        return not st2
+
+
 class StopStationData(BaseModel):
     """
     列車の停車駅情報を表すモデル。
@@ -458,7 +483,23 @@ class ActiveTrainData(TrainData):
     # サイト上で列車位置を表示するときのグリッド座標
     location_col: int
     location_row: int
-    
+
+    # 走行中の間の、位置情報ごとの値（古い順）。運行を終えて TrainData に戻ると消える
+    history: list[TrainHistoryRecord] = Field(default_factory=list)
+
+    def _record_history(self, file_created_time: datetime.datetime) -> None:
+        """今の値を history に加える。同じ位置情報を取り直したときは加えない"""
+        if self.history and self.history[-1].file_created_time == file_created_time:
+            return
+        self.history.append(TrainHistoryRecord(
+            file_created_time = file_created_time,
+            location_col = self.location_col,
+            location_row = self.location_row,
+            delay_minutes = self.delay_minutes,
+            direction = self.active_direction,
+            destination = self.active_destination,
+        ))
+
     @property
     def train_type(self):
         return self.active_train_type
@@ -726,6 +767,42 @@ class KHTracker:
             trains.append(train)
         return trains
 
+    def delay_growing_trains(
+            self,
+            line:   Optional[LineLiteral] = None,
+            window: datetime.timedelta = datetime.timedelta(minutes=5),
+            ratio:  float = 0.9,
+            ) -> list[ActiveTrainData]:
+        """
+        遅延が経過時間とほぼ同じ速さで増えている走行中の列車を返します。
+        window 以上前の位置情報の時点と比べて、遅延の増えが経過時間の ratio 倍以上の列車です。
+        止まっている列車は待たされた時間がそのまま遅延になるため、当てはまりやすくなります。
+        - line: 指定すると、今その路線にいる列車だけを返す
+        - 始発駅に停車中の列車と、出現してから window が経っていない列車は含まない
+        - 遅延が「2時間以上」になると delay_minutes は120で止まるため、止まったままでも当てはまらなくなる
+        """
+        if window <= datetime.timedelta(0):
+            raise ValueError(f"window は正の時間にしてください: {window}")
+        trains: list[ActiveTrainData] = []
+        for train in self.active_trains.values():
+            if not train.history:
+                continue
+            if line is not None and train.line != line:
+                continue
+            if train.is_at_start_station:
+                continue
+            now = train.history[-1]
+            past = next(
+                (r for r in reversed(train.history) if now.file_created_time - r.file_created_time >= window),
+                None,
+            )
+            if past is None:
+                continue
+            elapsed = (now.file_created_time - past.file_created_time).total_seconds() / 60
+            if now.delay_minutes - past.delay_minutes >= ratio * elapsed:
+                trains.append(train)
+        return trains
+
 
     async def _get(self, url: str) -> str:
         """URLを取得して本文を返す。snapshot_dirが指定されていれば保存もする。"""
@@ -875,6 +952,7 @@ class KHTracker:
                         position_since = self.train_position_list.fileCreatedTime,
                         )
                     self.trains[wdf] = new_active_train
+                    new_active_train._record_history(self.train_position_list.fileCreatedTime)
 
                 elif type(self.trains[wdf]) == ActiveTrainData:
                     # 可変の情報を更新
@@ -905,6 +983,8 @@ class KHTracker:
                     # 座標が変わったら、今の座標に来た時刻を更新する
                     if old_coordinate != new_coordinate:
                         active_train.position_since = self.train_position_list.fileCreatedTime
+
+                    active_train._record_history(self.train_position_list.fileCreatedTime)
 
         #ダイア情報を登録
         # 始発前は、公式のダイヤがまだ前の日のままのことがある。日付が変わってから、

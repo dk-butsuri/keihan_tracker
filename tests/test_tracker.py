@@ -427,6 +427,81 @@ def test_staying_time(api, fresh_tracker):
     assert fresh_tracker.trains[1096].staying_time == datetime.timedelta(0)
 
 
+def _position_1096_delayed(created: str, delay_text: str, row_offset: int = 0) -> dict:
+    """1096だけがいる位置情報で、遅延と座標を変えたもの"""
+    data = copy.deepcopy(_position_1096(created))
+    loc = data["locationObjects"][0]
+    loc["locationRow"] = str(int(loc["locationRow"]) + row_offset)
+    loc["trainInfoObjects"][0]["delayMinutes"] = delay_text
+    return data
+
+
+def test_history_recorded(api, fresh_tracker):
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212400", ""))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    assert isinstance(train, ActiveTrainData)
+    assert len(train.history) == 1
+    first = train.history[0]
+    assert first.file_created_time == datetime.datetime(2026, 10, 6, 21, 24, tzinfo=JST)
+    assert (first.location_col, first.location_row) == (train.location_col, train.location_row)
+    assert first.delay_minutes == 0
+    assert first.direction == train.direction
+    assert first.destination == train.destination
+    assert first.line == train.line
+    assert first.is_at_station == train.is_at_station
+
+    # 同じ位置情報を取り直しても増えない
+    run(fresh_tracker.fetch_pos())
+    assert len(fresh_tracker.trains[1096].history) == 1
+
+    # 新しい位置情報ごとに、更新した後の値が加わる
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212500", "2分遅れ", row_offset=1))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    assert isinstance(train, ActiveTrainData)
+    assert [r.delay_minutes for r in train.history] == [0, 2]
+    assert train.history[-1].location_row == train.location_row
+    assert train.history[0].location_row == train.location_row - 1
+
+    # 運行を終えて TrainData に戻ると消える
+    api.set_json(POSITION_PATH, make_position_list("20261006212600"))
+    run(fresh_tracker.fetch_pos())
+    assert not hasattr(fresh_tracker.trains[1096], "history")
+
+
+@pytest.mark.parametrize(
+    ("later", "delay_text", "line", "expected"),
+    [
+        ("20261006212900", "5分遅れ", None, True),                # 5分で5分増えた（止まっている）
+        ("20261006212900", "4分遅れ", None, False),               # 5分で4分（4.5分に届かない）
+        ("20261006212700", "3分遅れ", None, False),               # まだ5分経っていない
+        ("20261006212900", "5分遅れ", "京阪本線・鴨東線", True),
+        ("20261006212900", "5分遅れ", "宇治線", False),           # 1096は京阪本線にいる
+    ],
+)
+def test_delay_growing_trains(api, fresh_tracker, later, delay_text, line, expected):
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212400", ""))
+    run(fresh_tracker.fetch_pos())
+    api.set_json(POSITION_PATH, _position_1096_delayed(later, delay_text))
+    run(fresh_tracker.fetch_pos())
+    trains = fresh_tracker.delay_growing_trains(line=line)
+    assert (fresh_tracker.trains[1096] in trains) is expected
+
+
+def test_delay_growing_trains_window_and_ratio(api, fresh_tracker):
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212400", ""))
+    run(fresh_tracker.fetch_pos())
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212700", "2分遅れ"))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    # 3分で2分増えた
+    assert train not in fresh_tracker.delay_growing_trains(window=datetime.timedelta(minutes=3))
+    assert train in fresh_tracker.delay_growing_trains(window=datetime.timedelta(minutes=3), ratio=0.6)
+    with pytest.raises(ValueError):
+        fresh_tracker.delay_growing_trains(window=datetime.timedelta(0))
+
+
 def _flip_direction(data: dict, wdf: str) -> dict:
     loc = next(loc for loc in data["locationObjects"] if loc["trainInfoObjects"][0]["wdfBlockNo"] == wdf)
     loc["trainDirection"] = "1" if str(loc["trainDirection"]) == "0" else "0"
