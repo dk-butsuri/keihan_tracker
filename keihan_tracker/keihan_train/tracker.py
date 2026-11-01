@@ -565,7 +565,36 @@ class ActiveTrainData(TrainData):
         if self.position_since is None or position_list is None:
             return datetime.timedelta(0)
         return position_list.fileCreatedTime - self.position_since
-    
+
+    def delay_growth_rate(self, window: datetime.timedelta = datetime.timedelta(minutes=5)) -> Optional[float]:
+        """
+        遅延の増える速さ（分/分）。最新の位置情報と、それより window 以上前で最も新しい位置情報の時点を比べ、
+        遅延の増えを経過時間で割る。1.0 なら止まっているのと同じ速さで遅延が増えている。
+        - 比べられる記録が無い（出現してから window が経っていない）ときは None
+        - 遅延が「2時間以上」になると delay_minutes は120で止まるため、止まったままでも0になる
+        """
+        if window <= datetime.timedelta(0):
+            raise ValueError(f"window は正の時間にしてください: {window}")
+        if not self.history:
+            return None
+        now = self.history[-1]
+        past = next(
+            (r for r in reversed(self.history) if now.file_created_time - r.file_created_time >= window),
+            None,
+        )
+        if past is None:
+            return None
+        elapsed = (now.file_created_time - past.file_created_time).total_seconds() / 60
+        return (now.delay_minutes - past.delay_minutes) / elapsed
+
+    def is_delay_growing(self, window: datetime.timedelta = datetime.timedelta(minutes=5), ratio: float = 0.9) -> bool:
+        """
+        遅延が経過時間とほぼ同じ速さで増えているか（delay_growth_rate(window) が ratio 以上か）。
+        止まっている列車は待たされた時間がそのまま遅延になるため、当てはまりやすい。
+        """
+        rate = self.delay_growth_rate(window)
+        return rate is not None and rate >= ratio
+
     @property
     def line(self) -> LineLiteral:
         line, _, _ = calc_position(self.location_col, self.location_row)
@@ -785,32 +814,14 @@ class KHTracker:
             ratio:  float = 0.9,
             ) -> list[ActiveTrainData]:
         """
-        遅延が経過時間とほぼ同じ速さで増えている走行中の列車を返します。
-        window 以上前の位置情報の時点と比べて、遅延の増えが経過時間の ratio 倍以上の列車です。
-        止まっている列車は待たされた時間がそのまま遅延になるため、当てはまりやすくなります。
+        is_delay_growing(window, ratio) が True の走行中の列車を返します。
         - line: 指定すると、今その路線にいる列車だけを返す
-        - 始発駅に停車中の列車と、出現してから window が経っていない列車は含まない
-        - 遅延が「2時間以上」になると delay_minutes は120で止まるため、止まったままでも当てはまらなくなる
         """
-        if window <= datetime.timedelta(0):
-            raise ValueError(f"window は正の時間にしてください: {window}")
         trains: list[ActiveTrainData] = []
         for train in self.active_trains.values():
-            if not train.history:
-                continue
             if line is not None and train.line != line:
                 continue
-            if train.is_at_start_station:
-                continue
-            now = train.history[-1]
-            past = next(
-                (r for r in reversed(train.history) if now.file_created_time - r.file_created_time >= window),
-                None,
-            )
-            if past is None:
-                continue
-            elapsed = (now.file_created_time - past.file_created_time).total_seconds() / 60
-            if now.delay_minutes - past.delay_minutes >= ratio * elapsed:
+            if train.is_delay_growing(window, ratio):
                 trains.append(train)
         return trains
 
@@ -1087,8 +1098,9 @@ class KHTracker:
             # ダイヤ登録
             self.trains[wdf].route_stations = []
             for stop_station in (train.diaStationInfoObjects):
-                # 3桁の上２桁が駅番号
+                # 3桁の上２桁が駅番号。ほかの形は見たことがないので、仕様の変更に気付けるよう警告する
                 if len(stop_station.stationNumber) != 3:
+                    warnings.warn(f"[WDF{wdf}] 駅番号の形式を読めないため、この駅を飛ばしました: {stop_station.stationNumber!r}")
                     continue
                 station = self.stations.get(int(stop_station.stationNumber[0:2]))
 

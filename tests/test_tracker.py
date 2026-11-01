@@ -528,6 +528,33 @@ def test_delay_growing_trains_window_and_ratio(api, fresh_tracker):
         fresh_tracker.delay_growing_trains(window=datetime.timedelta(0))
 
 
+def test_delay_growth_rate(api, fresh_tracker):
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212400", ""))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    assert train.delay_growth_rate() is None  # 比べられる記録が無い
+    assert not train.is_delay_growing()
+
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212700", "2分遅れ"))
+    run(fresh_tracker.fetch_pos())
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006212900", "4分遅れ"))
+    run(fresh_tracker.fetch_pos())
+    train = fresh_tracker.trains[1096]
+    assert train.delay_growth_rate() == pytest.approx(4 / 5)              # 21:24 と比べる
+    assert train.delay_growth_rate(datetime.timedelta(minutes=2)) == 1.0  # 21:27 と比べる
+    assert not train.is_delay_growing()
+    assert train.is_delay_growing(ratio=0.8)
+    assert train.is_delay_growing(datetime.timedelta(minutes=2))
+
+    # 遅れを取り戻すとマイナス
+    api.set_json(POSITION_PATH, _position_1096_delayed("20261006213400", "1分遅れ"))
+    run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.trains[1096].delay_growth_rate() == pytest.approx(-3 / 5)  # 21:29 と比べる
+
+    with pytest.raises(ValueError):
+        train.delay_growth_rate(datetime.timedelta(0))
+
+
 def _flip_direction(data: dict, wdf: str) -> dict:
     loc = next(loc for loc in data["locationObjects"] if loc["trainInfoObjects"][0]["wdfBlockNo"] == wdf)
     loc["trainDirection"] = "1" if str(loc["trainDirection"]) == "0" else "0"
@@ -603,12 +630,13 @@ def test_regist_dia_parses_stops(api, fresh_tracker):
             _dia("011", "-"),       # 淀屋橋（始発）
             _dia("021", "12:01"),   # 北浜
             _dia("030", "99:99"),   # 天満橋（通過）
-            _dia("9", "12:03"),     # 3桁でないものは無視
-            _dia("991", "12:04"),   # 未登録の駅は無視
+            _dia("9", "12:03"),     # 3桁でないものは警告して飛ばす
+            _dia("991", "12:04"),   # 未登録の駅は飛ばす
             _dia("041", "12:05"),   # 京橋（終着）
         ]),
     ]))
-    run(fresh_tracker.fetch_pos())
+    with pytest.warns(UserWarning, match="'9'"):
+        run(fresh_tracker.fetch_pos())
 
     train = fresh_tracker.trains[1]
     assert [s.station.station_number for s in train.route_stations] == [1, 2, 3, 4]

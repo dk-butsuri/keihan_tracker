@@ -269,7 +269,7 @@ if __name__ == "__main__":
     *   **ActiveTrainData**: 現在APIに位置情報が存在する列車です。`is_stopping` (停車中か) や `location_col` (座標) などのリアルタイムなプロパティを持ちます。
     *   **TrainData**: ダイヤ上の予定データ、または運行終了したデータです。これらには現在位置情報がないため、`is_stopping` などのプロパティにアクセスするとエラーにはなりませんが、常にFalseなどのデフォルト値であったり、意味を持たない場合があります。
     *   `tracker.trains` には両方が混在しています。区別するには `isinstance(train, ActiveTrainData)` を使用してください。
-    *   **臨時列車 (`is_special=True`) は必ず `ActiveTrainData`** です。走行が確認された時点で `ActiveTrainData` として登録され、同時にダイヤ情報も登録されます。走行が確認されるまではダイヤ登録をスキップするため、当日運転しない臨時列車のゴースト登録を防いでいます。（2026GWで運行された臨時列車でゴースト現象を確認済み）
+    *   **ダイヤに臨時列車として載っている列車は、位置情報に現れるまで登録されません。** 公式のダイヤには、その日に走らない臨時列車も載っているためです（[信頼性ドキュメント](https://github.com/dk-butsuri/keihan_tracker/blob/main/docs/RELIABILITY.md#公式データにない情報確認できていないこと)）。そのため臨時列車は、走り出すまで `trains` / `upcoming_trains` / `find_trains()` に出ません。位置情報に現れた時点で `ActiveTrainData` として登録され、ダイヤの停車駅・時刻も使えるようになります。
 
 4.  **ダイヤに無い列車が走ることがある**
     *   運休・運転整理（2026年4月28日の停電によるダイヤ乱れで確認）や一部の臨時列車では、位置情報にはあるがダイヤ（startTimeList）には無い列車が `ActiveTrainData` として登録されます。`has_dia` で判別できます。
@@ -318,7 +318,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。公式APIが壊れたデータを返すと `KeihanAPIError` を送出します。
 *   `async regist_dia(download: bool)`: ダイヤ情報を更新します。通常は `fetch_pos()` から自動的に呼び出される（1時間に1回取り直す。日付が変わった直後は、走行中の列車の行先とダイヤの終着駅が一致するまで、5時30分まで取得のたびに取り直す）ため、実行する必要はありません。
 *   `find_trains(...)`: 条件に合致する列車をリストで返します。全引数はオプションで、省略した項目は絞り込み対象外となります。
-*   `delay_growing_trains(line=None, window=timedelta(minutes=5), ratio=0.9)`: 遅延が経過時間とほぼ同じ速さで増えている走行中の列車を返します。`window` 以上前の位置情報の時点と比べて、遅延の増えが経過時間の `ratio` 倍以上の列車です。止まっている列車は待たされた時間がそのまま遅延になるため当てはまりやすく、運行が止まっているかの手がかりになります。始発駅に停車中の列車と、出現してから `window` が経っていない列車は含みません。実際に止まったときに当てはまった本数は、[信頼性ドキュメント](https://github.com/dk-butsuri/keihan_tracker/blob/main/docs/RELIABILITY.md#運行が止まったとき)にあります。
+*   `delay_growing_trains(line=None, window=timedelta(minutes=5), ratio=0.9)`: `is_delay_growing(window, ratio)` が `True` の走行中の列車を返します。運行が止まっているかの手がかりになります。`line` を指定すると、今その路線にいる列車だけを返します。実際に止まったときに当てはまった本数は、[信頼性ドキュメント](https://github.com/dk-butsuri/keihan_tracker/blob/main/docs/RELIABILITY.md#運行が止まったとき)にあります。
 
 `find_trains(...)` の引数：
 
@@ -389,6 +389,8 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `is_at_start_station: Optional[bool]`: 現在、始発駅に停車中かどうか（`is_stopping` が `None` のときは `None`）
 *   `staying_time: datetime.timedelta`: 今の座標に留まっている時間。駅でも駅間でも、座標が変わらなければ増える。最後に取得した位置情報の作成時刻で測るため、取得の間やAPIが止まっている間は増えない。座標が粗いため走行中でも数分は増えることがあり、出現直後はそれ以前の時間を含まない
 *   `position_since: Optional[datetime.datetime]`: 今の座標に来た時刻（位置情報の作成時刻）
+*   `delay_growth_rate(window=timedelta(minutes=5)) -> Optional[float]`: 遅延の増える速さ（分/分）。最新の位置情報と、それより `window` 以上前で最も新しい位置情報の時点を比べ、遅延の増えを経過時間で割ります。1.0 なら、止まっているのと同じ速さで遅延が増えています。遅れを取り戻しているときはマイナスです。比べられる記録が無い（現れてから `window` が経っていない）ときは `None` です。遅延が「2時間以上」になると `delay_minutes` は120で止まるため、止まったままでも0になります
+*   `is_delay_growing(window=timedelta(minutes=5), ratio=0.9) -> bool`: `delay_growth_rate(window)` が `ratio` 以上か。止まっている列車は待たされた時間がそのまま遅延になるため、当てはまりやすくなります
 
 ### StationData
 駅を表すクラス。
