@@ -210,6 +210,15 @@ def test_find_trains_direction_includes_scheduled(tracker, direction):
     assert len(not_active) < len([t for t in tracker.trains.values() if not isinstance(t, ActiveTrainData)])
 
 
+@pytest.mark.parametrize("line", ["京阪本線・鴨東線", "中之島線", "交野線", "宇治線"])
+def test_find_trains_line(tracker, line):
+    """走行中の列車も、走行中でない列車も、路線で絞り込む"""
+    found = tracker.find_trains(line=line)
+    assert found
+    assert all(t.line == line for t in found)
+    assert len(found) == sum(t.line == line for t in tracker.trains.values())
+
+
 def test_find_trains_active_only_conditions_exclude_others(tracker):
     """走行中の列車だけが持つ値を指定したら、走行中でない列車は当てはまらない"""
     train = next(t for t in tracker.active_trains.values() if t.is_stopping is not None)

@@ -756,7 +756,8 @@ class KHTracker:
             next_stop_station:   Optional[StationData] = None,
             min_delay:      Optional[int] = None,
             max_delay:      Optional[int] = None,
-            is_stopping:    Optional[bool] = None
+            is_stopping:    Optional[bool] = None,
+            line:           Optional[LineLiteral] = None,
             ) -> Sequence[TrainData]:
         """
         条件に合致する列車を検索してリストで返します。
@@ -768,6 +769,7 @@ class KHTracker:
         - has_premiumcar: プレミアムカー付きかどうか
         - destination: 行き先駅
         - next_stop_station: 次の停車駅 or 停車中の駅
+        - line: 路線。走行中の列車は今いる路線、走行中でない列車は TrainData.line（走ったことがあればそのときの路線、なければ停車駅から推定した路線）
         is_special・train_number・next_stop_station・is_stopping は走行中の列車だけが持つ値のため、
         指定すると走行中でない列車は当てはまりません。
         """
@@ -787,6 +789,8 @@ class KHTracker:
             if max_delay is not None    and train.delay_minutes >= max_delay:
                 continue
             if direction is not None    and train.direction != direction:
+                continue
+            if line is not None         and train.line != line:
                 continue
 
             # 以下は走行中の列車だけが持つ値。指定されたら、走行中でない列車は当てはまらない
@@ -815,15 +819,13 @@ class KHTracker:
             ) -> list[ActiveTrainData]:
         """
         is_delay_growing(window, ratio) が True の走行中の列車を返します。
-        - line: 指定すると、今その路線にいる列車だけを返す
+        - line: 指定すると、今その路線にいる列車だけを返す（find_trains の line と同じ）
         """
-        trains: list[ActiveTrainData] = []
-        for train in self.active_trains.values():
-            if line is not None and train.line != line:
-                continue
-            if train.is_delay_growing(window, ratio):
-                trains.append(train)
-        return trains
+        # active=True なので全部 ActiveTrainData。isinstance は型を絞るため
+        return [
+            train for train in self.find_trains(active=True, line=line)
+            if isinstance(train, ActiveTrainData) and train.is_delay_growing(window, ratio)
+        ]
 
 
     async def _get(self, url: str) -> str:

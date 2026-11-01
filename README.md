@@ -335,6 +335,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 | `min_delay` | `int` | この分数を**超える**遅延のみ対象 |
 | `max_delay` | `int` | この分数**未満**の遅延のみ対象 |
 | `is_stopping` | `bool` | 停車中かどうか（走行中の列車のみ。指定すると走行中でない列車は該当しない。`is_stopping` が `None` の列車はどちらを指定しても該当しない） |
+| `line` | `LineLiteral` | 路線（例: `"宇治線"`）。走行中の列車は今いる路線、走行中でない列車は走ったときの路線か、停車駅から推定した路線 |
 
 ### 列車データの構造 (TrainData と ActiveTrainData)
 
