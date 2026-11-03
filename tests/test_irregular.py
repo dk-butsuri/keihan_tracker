@@ -9,9 +9,11 @@ import datetime
 import hashlib
 import json
 
+import httpx
 import pytest
 
 from keihan_tracker import ActiveTrainData, KeihanAPIError, TrainData
+from keihan_tracker.keihan_train.tracker import JST
 
 from conftest import load_fixture, load_fixture_bytes, make_position_list, run
 
@@ -141,6 +143,26 @@ def test_broken_position_raises_and_keeps_state(api, fresh_tracker, name):
     api.set_json(POSITION_PATH, data)
     run(fresh_tracker.fetch_pos())
     assert _state(fresh_tracker) == before
+
+
+def test_position_created_at_kept_when_fetch_fails(api, fresh_tracker):
+    """取得に失敗しても position_created_at は進まず、データの古さが分かる"""
+    assert fresh_tracker.position_created_at is None
+    run(fresh_tracker.fetch_pos())
+    created = fresh_tracker.position_created_at
+    assert created == datetime.datetime(2026, 10, 6, 21, 24, 9, tzinfo=JST)
+
+    api.responses[POSITION_PATH] = _position("position_truncated.json")
+    with pytest.raises(KeihanAPIError):
+        run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.position_created_at == created
+
+    del api.responses[POSITION_PATH]  # 404
+    with pytest.raises(httpx.HTTPStatusError):
+        run(fresh_tracker.fetch_pos())
+    assert fresh_tracker.position_created_at == created
+    # 失敗した取得でも last_fetch_pos_datetime は進むため、古さの判断には使えない
+    assert fresh_tracker.last_fetch_pos_datetime > created
 
 
 def test_broken_position_is_value_error(api, fresh_tracker):

@@ -743,6 +743,13 @@ class KHTracker:
         self.stations:dict[int, StationData] = {}
 
     @property
+    def position_created_at(self) -> Optional[datetime.datetime]:
+        """手元の位置情報の作成時刻（fileCreatedTime）。取得に失敗しても変わらないので、データの古さの判断に使う"""
+        if self.train_position_list is None:
+            return None
+        return self.train_position_list.fileCreatedTime
+
+    @property
     def active_trains(self) -> dict[int, ActiveTrainData]:
         d:dict[int, ActiveTrainData] = {}
         for train in self.trains.values():
