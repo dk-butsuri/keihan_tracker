@@ -9,7 +9,7 @@
 ---
 
 ## 概要
-京阪電車公式APIのJSONデータをPydanticモデルでバリデートし、Pythonクラスから駅・路線・列車・ダイヤ情報を直感的に操作できるライブラリです。
+京阪電車の公式サイトの列車位置ページが使っているJSONデータをPydanticモデルでバリデートし、Pythonクラスから駅・路線・列車・ダイヤ情報を直感的に操作できるライブラリです。
 
 「現在どこを走っているか」だけでなく、「これからどのような列車が来るか」というダイヤ情報も統合して扱えるため、駅の発車標のようなアプリケーションも簡単に作成できます。
 
@@ -39,8 +39,8 @@
         └── [TrainData|ActiveTrainData] (列車)
                ├── .next_stop_station ──→ 次に止まる [StationData]
                ├── .stop_stations     ──→ 停車駅リスト
-               ├── .train_type        ──→ [推定] 停車駅に基づく種別
-               ├── .direction         ──→ [推定] 始発・終着に基づく方向
+               ├── .train_type        ──→ 種別（予定の列車は停車駅から推定）
+               ├── .direction         ──→ 方向（予定の列車は始発・終着から推定）
                └── その他多数...
 ```
 
@@ -50,13 +50,7 @@
 pip install keihan-tracker
 ```
 
-## 依存パッケージ
-```pip install```時にインストールされます。
-- Python 3.10+
-- pydantic
-- httpx
-- tabulate
-- tzdata (タイムゾーン情報)
+Python 3.10 以上が必要です。依存パッケージ（pydantic・httpx・tabulate・tzdata）は一緒にインストールされます。
 
 ## 使い方
 
@@ -100,30 +94,36 @@ asyncio.run(main())
 
 ```python
 import asyncio
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
 import httpx
 from keihan_tracker import KHTracker, KeihanAPIError
 
+JST = ZoneInfo("Asia/Tokyo")
+STALE_AFTER = timedelta(minutes=5)  # これより古いデータは表示しない
+
 async def watch_loop():
     tracker = KHTracker()
-    
+
     while True:
-        # データを更新
         # 公式APIが壊れたデータを返したり、通信に失敗したりしても、次の分で取り直せばよい
         try:
             await tracker.fetch_pos()
         except (KeihanAPIError, httpx.HTTPError) as e:
             print(f"取得に失敗しました: {e}")
-            await asyncio.sleep(60)
-            continue
-        
-        # 例: 現在最も遅れている列車を表示
-        worst_train = tracker.max_delay_train
-        max_delay = tracker.max_delay_minutes
 
-        print(f"\r現在走行中の列車数: {len(tracker.trains)} | 最大遅延: {max_delay}分")
-        
-        if worst_train:
-            print(f"⚠️ {worst_train.train_number}号 ({worst_train.train_type.value}) が {max_delay}分 遅延しています！")
+        # 取得に失敗しても前回のデータは残るため、古さは位置情報の作成時刻で判断する
+        created = tracker.position_created_at
+        if created is None or datetime.now(JST) - created > STALE_AFTER:
+            print("情報が古いため、表示を止めています")
+        else:
+            # 例: 現在最も遅れている列車を表示
+            worst_train = tracker.max_delay_train
+            max_delay = tracker.max_delay_minutes
+            print(f"現在走行中の列車数: {len(tracker.active_trains)} | 最大遅延: {max_delay}分")
+            if worst_train:
+                print(f"⚠️ {worst_train.train_number}号 ({worst_train.train_type.value}) が {max_delay}分 遅延しています！")
 
         # 60秒待機 (京阪側の更新頻度は1分間隔)
         await asyncio.sleep(60)
@@ -134,7 +134,7 @@ if __name__ == "__main__":
 
 ### 3. 遅延を加味した停車駅到着時刻の推定
 
-`delay_minutes`だけでは、列車が「単に遅延して走っている」のか「途中で足止めされている」のかを区別できません。大幅遅延時は `staying_time` と `is_at_start_station` を使うことで、推定到着時刻が信頼できるかを判定できます。
+`delay_minutes`だけでは、列車が「単に遅延して走っている」のか「途中で足止めされている」のかを区別できません。大幅遅延時は `is_delay_growing()`・`staying_time`・`is_at_start_station` を使うことで、推定到着時刻が信頼できるかを判定できます。
 また、公式APIは120分以上の遅れを「2時間以上」としか返さないため、`delay_minutes` は最大でも120になります（実際の遅れはそれより大きいことがあります）。
 遅延分数を停車時刻表に表示する際は、どこで何分間止まっているか（`is_at_station` なら `next_station` の駅、そうでなければ駅間）を表示すると良いでしょう。
 
@@ -158,6 +158,10 @@ def estimate_arrival(train: ActiveTrainData, station: StationData):
     # 始発駅での長時間停車は正常（発車待ち）なので除外
     if train.is_at_start_station:
         return estimated
+
+    # 遅延が経過時間とほぼ同じ速さで増えているなら、止まっている可能性が高い
+    if train.is_delay_growing():
+        return None  # 推定不可
 
     # 閾値以上同じ位置にいるなら（駅でも駅間でも）足止めの可能性があり推定信頼度が低い
     if train.staying_time > STUCK_THRESHOLD:
@@ -193,13 +197,16 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### 5. 運行情報（遅延情報）
-運行情報の機能（`get_ekispert_delay`・`DelayLine`）は v2.7.0 で削除しました。
-各社の公式サイトの運行情報は、物理部の別のライブラリ [train_operation_info](https://github.com/dk-butsuri/train_operation_info) で取得できます。
+## 表示する側（サイネージなど）でやること
+
+ライブラリは公式の値と、その値から計算できることを返すだけです。次の2つは、表示する側で判断してください。
+
+*   **データの古さ**：取得に失敗し続けても、列車の状態は最後に取得できたときのまま残ります（2026年10月21〜22日には約22時間）。`datetime.now(JST) - tracker.position_created_at` が数分を超えたら（[使い方の2](#2-リアルタイム監視ポーリング)）、「情報が古い」と表示するか、列車の表示を消してください。公式の位置情報は1分ごとに作られるため、1分ごとに取得していれば通常は2分以内です。`last_fetch_pos_datetime` は失敗した取得でも更新されるため、使えません。
+*   **推定時刻を出してよいか**：運行が止まっている間、「遅延分数＋ダイヤの時刻」で求めた到着時刻は実際より早くなります。`delay_growing_trains()` に入っている列車や、`staying_time` が長い列車は、推定時刻を出さずに「どこで何分止まっているか」を表示してください（[使い方の3](#3-遅延を加味した停車駅到着時刻の推定)）。
 
 ## 知っておくべき仕様・注意点 (ハマりポイント)
 
-このライブラリを使用する際の注意点を以下に挙げます。
+### 書き方の基本
 
 1.  **非同期処理が必須 (`async`/`await`)**
     *   本ライブラリは `httpx` を使用した非同期設計です。`tracker.fetch_pos()` などのメソッドは必ず `await` する必要があります。
@@ -209,33 +216,35 @@ if __name__ == "__main__":
     *   `KHTracker()` をインスタンス化した直後は、駅データも列車データも空です。
     *   必ず最初に `await tracker.fetch_pos()` を呼び出してください。また、列車位置は自動更新されないため、最新位置を知るには定期的（30秒から数分間隔が目安）にこのメソッドを呼ぶ必要があります。
 
-3.  **「走行中」と「予定」の列車クラスの違い**
+3.  **駅番号は整数 (int)**
+    *   駅番号（ナンバリング）は `KH01` のような文字列ではなく、数字部分の整数 `1` として扱います。辞書のキーも整数です。
+
+4.  **時刻は日本標準時 (JST)**
+    *   ライブラリ内で扱われる `datetime` オブジェクトには、すべてタイムゾーン情報（`Asia/Tokyo`）が付与されています。
+    *   現在時刻と比較する場合は、`datetime.now()` ではなく `datetime.now(ZoneInfo("Asia/Tokyo"))` などと比較しないとエラーになります。
+
+### 公式データの癖
+
+1.  **「走行中」と「予定」の列車クラスの違い**
     *   **ActiveTrainData**: 現在APIに位置情報が存在する列車です。`is_stopping` (停車中か) や `location_col` (座標) などのリアルタイムなプロパティを持ちます。
     *   **TrainData**: ダイヤ上の予定データ、または運行終了したデータです。これらには現在位置情報がないため、`is_stopping` などのプロパティにアクセスするとエラーにはなりませんが、常にFalseなどのデフォルト値であったり、意味を持たない場合があります。
     *   `tracker.trains` には両方が混在しています。区別するには `isinstance(train, ActiveTrainData)` を使用してください。
     *   **ダイヤに臨時列車として載っている列車は、位置情報に現れるまで登録されません。** 公式のダイヤには、その日に走らない臨時列車も載っているためです（[信頼性ドキュメント](https://github.com/dk-butsuri/keihan_tracker/blob/main/docs/RELIABILITY.md#公式データにない情報確認できていないこと)）。そのため臨時列車は、走り出すまで `trains` / `upcoming_trains` / `find_trains()` に出ません。位置情報に現れた時点で `ActiveTrainData` として登録され、ダイヤの停車駅・時刻も使えるようになります。
 
-4.  **ダイヤに無い列車が走ることがある**
+2.  **ダイヤに無い列車が走ることがある**
     *   運休・運転整理（2026年4月28日の停電によるダイヤ乱れで確認）や一部の臨時列車では、位置情報にはあるがダイヤ（startTimeList）には無い列車が `ActiveTrainData` として登録されます。`has_dia` で判別できます。
     *   種別・行先・方向・`is_special` は位置情報から取得するため正確ですが、停車駅・時刻・始発駅・プレミアムカー・編成番号は分かりません。`start_station` は `DiaNotFoundError`（`ValueError` のサブクラス）を送出し、`stop_stations` は空、`next_stop_station` は `None` になります。
     *   ダイヤに無い列車は、`StationData.arriving_trains` / `upcoming_trains` / `trains` には含まれません。
     *   ダイヤが乱れている間は、ダイヤに載っている列車でも `stop_stations` や `next_stop_station` が実際の運行と異なる場合があります。また、停車駅の時刻が不明（`None`）になることがあります。時刻不明の停車は、`StationData.trains` / `upcoming_trains` では時刻順の最後に並びます。
 
-5.  **公式APIが壊れたデータを返すことがある**
+3.  **公式APIが壊れたデータを返すことがある**
     *   末尾にNULが付いたJSONや、途中で切れたJSONが返ることがあります（2026年10月7日の朝に4分間で2回確認）。このとき `fetch_pos()` は `KeihanAPIError`（`ValueError` のサブクラス）を送出します。通信の失敗は `httpx.HTTPError` になります。
-    *   位置情報が壊れていた場合、列車の状態は前回の取得のまま変わりません。ダイヤが壊れていた場合は、位置情報だけ更新されています。どちらも次の `fetch_pos()` で取り直すので、ループ内で例外を捕まえて呼び続けてください（上の「2. リアルタイム監視」の例）。
+    *   位置情報が壊れていた場合、列車の状態は前回の取得のまま変わりません。ダイヤが壊れていた場合は、位置情報だけ更新されています。どちらも次の `fetch_pos()` で取り直すので、ループ内で例外を捕まえて呼び続けてください（[使い方の2](#2-リアルタイム監視ポーリング)の例）。
     *   全列車の行先が「00」（行先なし）で返ることがあります（23時台に確認）。このとき `ActiveTrainData.destination` はダイヤの終着駅で補い、ダイヤも無ければ `None` になります。
 
-6.  **寝屋川市止まりの一部は、着いたあと寝屋川信号場へ回送される**
+4.  **寝屋川市止まりの一部は、着いたあと寝屋川信号場へ回送される**
     *   ダイヤでは寝屋川市の後に寝屋川信号場（駅番号99）が続く列車があり、寝屋川市に着いたあとも同じ列車のまま萱島方向へ走ります（2026年10月8日 0:05に確認）。公式の行先は寝屋川市のままです。
     *   寝屋川信号場は駅として登録していないため、この間は `next_station` が萱島、`next_stop_station` が `None` になります。萱島の `upcoming_trains` には出ません。
-
-7.  **駅番号は整数 (int)**
-    *   駅番号（ナンバリング）は `KH01` のような文字列ではなく、数字部分の整数 `1` として扱います。辞書のキーも整数です。
-
-8.  **時刻は日本標準時 (JST)**
-    *   ライブラリ内で扱われる `datetime` オブジェクトには、すべてタイムゾーン情報（`Asia/Tokyo`）が付与されています。
-    *   現在時刻と比較する場合は、`datetime.now()` ではなく `datetime.now(ZoneInfo("Asia/Tokyo"))` などと比較しないとエラーになります。
 
 ## クラスリファレンス
 
@@ -255,7 +264,8 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `date: datetime.date`: 現在の営業日（0〜4時の深夜帯は前日扱い）
 *   `max_delay_train: Optional[ActiveTrainData]`: 最も遅延している列車（0分の場合はNoneを返す）
 *   `max_delay_minutes: int`: 現在の最大遅延分数
-*   `last_fetch_pos_datetime: Optional[datetime]`: 最後に `fetch_pos()` を実行した時刻
+*   `position_created_at: Optional[datetime]`: 手元の位置情報の作成時刻（`fileCreatedTime`）。取得に失敗しても変わらないため、データの古さはこれで判断する（[表示する側でやること](#表示する側サイネージなどでやること)）
+*   `last_fetch_pos_datetime: Optional[datetime]`: 最後に `fetch_pos()` を実行した時刻。失敗した取得でも更新されるため、データの古さの判断には使えない
 *   `rate_limit_interval: float`: 現在設定されているレートリミット間隔（秒）
 
 #### 主要メソッド
@@ -306,6 +316,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `start_station: StationData`: 始発駅。ダイヤに無い列車では `DiaNotFoundError` を送出します
 *   `has_dia: bool`: ダイヤ（停車駅・時刻）があるか
 *   `stop_stations: list[StopStationData]`: 全停車駅のリスト（走行順）
+*   `get_stop_time(station: StationData) -> Optional[datetime]`: その駅の到着/出発時刻。停車しない駅や、時刻が不明の駅では `None`
 *   `route_stations: list[StopStationData]`: 停車・通過駅のリスト（走行順。一部の通過駅のみが含まれる）
 *   `has_premiumcar: Optional[bool]`: プレミアムカーがあるか
 *   `delay_minutes: int` 遅延分数（`TrainData` では常に0）
@@ -418,11 +429,24 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 
 > **注**: ダイヤ上のデータからライナーを識別することは仕様上困難なため、`TrainData.train_type` では `LINER` ではなく `LTD_EXP`（特急）と推定されます。樟葉始発のライナーは、停車駅が同じ `COMMUTER_RAPID_EXP`（通勤快急）と推定されます。`ActiveTrainData` ではAPIから正確な種別が返ります。
 
-## 公式APIエンドポイント
-本ライブラリは以下の公開JSONを利用しています。
-- 駅・路線データ: `select_station.json`, `transferGuideInfo.json`
-- リアルタイム位置: `trainPositionList.json`
-- ダイヤ・時刻: `startTimeList.json`
+## 取得先と負荷への配慮
+
+本ライブラリは、次の公開データを取得します。
+
+| 取得先 | 内容 | 取得する頻度 |
+|:---|:---|:---|
+| `www.keihan.co.jp/zaisen/select_station.json`, `transferGuideInfo.json` | 駅・路線・乗換 | 最初の `fetch_pos()` のみ |
+| `www.keihan.co.jp/zaisen-up/trainPositionList.json` | 列車位置・遅延 | `fetch_pos()` のたび（`rate_limit` 秒に1回まで） |
+| `www.keihan.co.jp/zaisen-up/startTimeList.json` | ダイヤ・時刻 | 原則1時間に1回（変わっていなければ `304 Not Modified`） |
+| `busnavi.keihanbus.jp/pc/busstateupd` | バスの接近情報 | `get_khbus_info()` のたび（同じバス停は30秒間キャッシュ） |
+
+*   **名乗ってアクセスします**：リクエストの User-Agent は `keihan_tracker (+https://github.com/dk-butsuri/keihan_tracker)` です。ブラウザのふりはしません。
+*   **取得の間隔に下限があります**：`rate_limit` は既定で30秒、15秒未満は指定できません。公式の位置情報は1分ごとにしか更新されないため、それより短くしても新しい情報は増えません。
+*   **読み取りのみです**：ログインや認証を必要とするデータは扱いません。
+
+## 関連プロジェクト
+
+*   [train_operation_info](https://github.com/dk-butsuri/train_operation_info)：各社の公式サイトの運行情報を取得するライブラリです。本ライブラリの運行情報の機能（`get_ekispert_delay`・`DelayLine`）は v2.7.0 で削除したため、運行情報はこちらを使ってください。
 
 ## ライセンス
 MIT License
