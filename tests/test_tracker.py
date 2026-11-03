@@ -3,8 +3,8 @@ import datetime
 
 import pytest
 
-from keihan_tracker import ActiveTrainData, DiaNotFoundError, StationData, TrainData, TrainType
-from keihan_tracker.keihan_train.tracker import JST, _parse_delay_minutes
+from keihan_tracker import ActiveTrainData, DiaNotFoundError, KHTracker, StationData, TrainData, TrainType
+from keihan_tracker.keihan_train.tracker import JST, MIN_RATE_LIMIT, USER_AGENT, _parse_delay_minutes
 
 from conftest import load_fixture, make_position_list, make_tracker, run
 
@@ -241,6 +241,16 @@ def test_rate_limit_skips_request(api):
     run(tracker.fetch_pos())
     run(tracker.fetch_pos())
     assert api.requests.count(POSITION_PATH) == 1
+
+
+def test_rate_limit_below_minimum_rejected():
+    with pytest.raises(ValueError, match="rate_limit"):
+        KHTracker(rate_limit=MIN_RATE_LIMIT - 1)
+    assert KHTracker(rate_limit=MIN_RATE_LIMIT).rate_limit_interval == MIN_RATE_LIMIT
+
+
+def test_user_agent_names_library():
+    assert KHTracker().web.headers["User-Agent"] == USER_AGENT
 
 
 def test_dia_not_redownloaded_within_an_hour(api, fresh_tracker):

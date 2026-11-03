@@ -2,7 +2,7 @@ from httpx import AsyncClient
 import urllib.parse
 import time
 from keihan_tracker.bus.schemes import BusLocationResponse
-from keihan_tracker.keihan_train.tracker import KeihanAPIError
+from keihan_tracker.keihan_train.tracker import KeihanAPIError, USER_AGENT
 
 UPDATE_URL = "https://busnavi.keihanbus.jp/pc/busstateupd"
 RATE_LIMIT_SECONDS = 30
@@ -18,7 +18,7 @@ async def get_khbus_info(stop_name:str, stop_num:int=1) -> BusLocationResponse:
     cached = _cache.get(key)
     if cached and time.monotonic() - cached[0] < RATE_LIMIT_SECONDS:
         return cached[1]
-    async with AsyncClient() as client:
+    async with AsyncClient(headers={"User-Agent": USER_AGENT}) as client:
         dgmpl = f"{stop_name}:{stop_num}::"
         result = await client.post(UPDATE_URL,data={"dgmpl":urllib.parse.quote(dgmpl), "sort4":"0"})
         result.raise_for_status()

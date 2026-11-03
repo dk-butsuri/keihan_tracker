@@ -1,6 +1,9 @@
 import hashlib
 import json
 
+from keihan_tracker import TrainType
+from keihan_tracker.keihan_train.schemes import trainPositionList
+
 from conftest import WAYBACK_SNAPSHOTS, load_fixture_bytes
 
 
@@ -22,3 +25,22 @@ def test_wayback_corpus_complete_and_unchanged():
                 len(loc["trainInfoObjects"]) for loc in data["locationObjects"]
             )
             assert count == payload["train_count"], payload["file"]
+
+
+def test_special_train_type_prefix_removed():
+    """臨時列車の種別は「臨時　　　　特急」のように来る。「臨時」を除いた種別にし、is_special を立てる。"""
+    expected = {
+        "20250420014659_trainPositionList.json": TrainType.LTD_EXP,
+        "20250527125843_trainPositionList.json": TrainType.RAPID_EXP,
+    }
+    for name, train_type in expected.items():
+        raw = json.loads(load_fixture_bytes("wayback/" + name))
+        specials = [t["wdfBlockNo"] for loc in raw["locationObjects"]
+                    for t in loc["trainInfoObjects"] if t["trainTypeJp"].startswith("臨時")]
+        assert specials, name
+        parsed = trainPositionList.model_validate(raw)
+        trains = {t.wdfBlockNo: t for loc in parsed.locationObjects for t in loc.trainInfoObjects}
+        for wdf in specials:
+            assert trains[int(wdf)].is_special, (name, wdf)
+            assert trains[int(wdf)].trainTypeJp == train_type, (name, wdf)
+        assert not any(t.is_special for wdf, t in trains.items() if wdf not in map(int, specials))

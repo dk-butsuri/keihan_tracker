@@ -12,10 +12,6 @@ INSTALL_REQUIRES = [
     "tabulate",
     "tzdata"
     ]
-# 非推奨の get_yahoo_delay だけが使うため任意インストール
-EXTRAS_REQUIRE = {
-    "delay": ["beautifulsoup4"],
-    }
 LICENSE = "MIT License"
 CLASSIFIERS = [
     "Programming Language :: Python :: 3",
@@ -45,7 +41,6 @@ setup(name=NAME,
       packages=find_packages(),
       python_requires=PYTHON_REQUIRES,
       install_requires=INSTALL_REQUIRES,
-      extras_require=EXTRAS_REQUIRE,
       license=LICENSE,
       classifiers=CLASSIFIERS,
       keywords=["keihan","train","parse","parsing","validation","tracking","position","京阪","鉄道","位置"],

@@ -39,6 +39,10 @@ JST = ZoneInfo("Asia/Tokyo")
 DATE_CHANGE_TIME = 4
 # 日付が変わったあと、ダイヤが今日のものだと確かめられなくても、取得のたびの取り直しをやめる時刻（安全装置）
 DIA_RETRY_DEADLINE = datetime.time(5, 30)
+# fetch_pos の間隔の下限（秒）。公式の位置情報は1分ごとにしか更新されないため、これより短くしても新しい情報は増えない
+MIN_RATE_LIMIT = 15
+# 京阪のサーバーから、どこのプログラムのアクセスか分かるように名乗る
+USER_AGENT = "keihan_tracker (+https://github.com/dk-butsuri/keihan_tracker)"
 
 
 class KeihanAPIError(ValueError):
@@ -707,6 +711,8 @@ class KHTracker:
     - snapshot_dir を指定すると、取得したAPIレスポンスをそのまま保存する（デバッグ用）
     """
     def __init__(self, rate_limit:float = 30, snapshot_dir: Optional[str | Path] = None) -> None:
+        if rate_limit < MIN_RATE_LIMIT:
+            raise ValueError(f"rate_limit は {MIN_RATE_LIMIT} 秒以上にしてください（指定値: {rate_limit}）。")
         #パースしたJSONデータ（BaseModel）
         self.transfer_guide_info: Optional[TransferGuideInfo] = None # 駅ごとの乗り入れデータ
         self.select_station: Optional[SelectStation] = None          # 路線ごとの駅名データ
@@ -718,7 +724,7 @@ class KHTracker:
         if 0 <= datetime.datetime.now(JST).hour < DATE_CHANGE_TIME:
             self.date = self.date - datetime.timedelta(days=1)
         
-        self.web = AsyncClient()
+        self.web = AsyncClient(headers={"User-Agent": USER_AGENT})
         self.last_fetch_pos_datetime: Optional[datetime.datetime] = None # 最後にfetch_posを行った時刻
         self.last_regist_dia_datetime: Optional[datetime.datetime] = None # 最後にregist_diaでfetchした時刻
         self.last_regist_dia_date: Optional[datetime.date] = None

@@ -85,7 +85,8 @@ class MockKeihanAPI:
 
 
 def make_tracker(api: MockKeihanAPI) -> KHTracker:
-    tracker = KHTracker(rate_limit=0)
+    tracker = KHTracker()
+    tracker.rate_limit_interval = 0  # テストではモックに何度でも取りに行く
     tracker.web = httpx.AsyncClient(transport=httpx.MockTransport(api.handler))
     # KHTracker.date は初期化時の実時刻から決まるため、fixtureの取得日にそろえる
     created = json.loads(api.responses["/zaisen-up/trainPositionList.json"])["fileCreatedTime"]

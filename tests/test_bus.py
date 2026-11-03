@@ -10,6 +10,7 @@ import pytest
 from keihan_tracker import KeihanAPIError
 from keihan_tracker.bus import tracker as bus_tracker
 from keihan_tracker.bus.tracker import get_khbus_info
+from keihan_tracker.keihan_train.tracker import USER_AGENT
 
 from conftest import run
 
@@ -30,15 +31,16 @@ def _response(prms: list[str]) -> dict:
 @pytest.fixture
 def bus_api(monkeypatch):
     """BUS NAVI のモック。responses[0] に入れた本文を返し、受け取ったリクエスト数を数える。"""
-    state = {"body": json.dumps(_response([PRMS]), ensure_ascii=False), "requests": 0}
+    state = {"body": json.dumps(_response([PRMS]), ensure_ascii=False), "requests": 0, "user_agent": None}
 
     def handler(request: httpx.Request) -> httpx.Response:
         state["requests"] += 1
+        state["user_agent"] = request.headers.get("User-Agent")
         return httpx.Response(200, text=state["body"])
 
     monkeypatch.setattr(
         bus_tracker, "AsyncClient",
-        lambda: httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs),
     )
     monkeypatch.setattr(bus_tracker, "_cache", {})
     return state
@@ -52,6 +54,11 @@ def test_bus_parsed(bus_api):
     assert prms.destination == "京阪香里園"
     assert prms.status == "まもなく到着"
     assert prms.timetable == "17:30 到着予定"
+
+
+def test_bus_user_agent_names_library(bus_api):
+    run(get_khbus_info("京阪香里園", 1))
+    assert bus_api["user_agent"] == USER_AGENT
 
 
 def test_bus_cached_within_30_seconds(bus_api):

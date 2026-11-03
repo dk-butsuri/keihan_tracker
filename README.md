@@ -19,7 +19,7 @@
 *   **相互リンク構造**: 「この駅に来る列車」⇔「この列車の次の駅」といった情報を双方向に参照可能。
 *   **型安全**: 公式APIのJSONをPydanticで厳密に定義。エディタの補完が効きます。
 *   **高度な位置特定**: 路線図上のグリッド座標から「走行中」か「停車中」かを独自ロジックで判定。
-*   **バス情報**: 電車だけでなく、京阪バスの接近情報も取得可能。（関西エリア全体の運行情報の取得は非推奨です）
+*   **バス情報**: 電車だけでなく、京阪バスの接近情報も取得可能。
 *   **レートリミット内蔵**: サーバー負荷を考慮し、30秒/reqのレート制限を内蔵。意図しない高頻度取得を防ぎます。
 
 各値がどこまで信頼できるか（公式データそのままか推定か）と、その検証内容は [信頼性ドキュメント](https://github.com/dk-butsuri/keihan_tracker/blob/main/docs/RELIABILITY.md) にまとめています。
@@ -57,11 +57,6 @@ pip install keihan-tracker
 - httpx
 - tabulate
 - tzdata (タイムゾーン情報)
-
-非推奨の `get_yahoo_delay` を使う場合は、beautifulsoup4 も必要です。
-```bash
-pip install keihan-tracker[delay]
-```
 
 ## 使い方
 
@@ -198,60 +193,9 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-### 5. 運行情報（遅延情報）の取得【非推奨】
-> ⚠️ **非推奨**：`get_yahoo_delay` と `get_ekispert_delay` は非推奨で、将来のバージョンで削除する可能性があります。呼び出すと `DeprecationWarning` を出します。
-> Yahoo!路線情報は運行情報の二次利用を禁止しており、駅すぱあとのAPIは有料契約が必要で動作を確認できないためです。
-
-遅延情報の取得には2つの方法があります。
-* Yahoo!路線情報 (スクレイピング)
-* 駅すぱあと 運行情報API（要契約）
-#### A. Yahoo!路線情報 (スクレイピング)
-関西エリア（デフォルト）の運行情報を取得します。 `pip install keihan-tracker[delay]` で beautifulsoup4 をインストールしてください。
-
-**注：Yahoo!路線情報の運行情報は[二次利用を禁止しており](https://support.yahoo-net.jp/PccTransit/s/article/H000007493)、私的利用に限ります。**
-利用に際しては、[LINEヤフー共通利用規約](https://www.lycorp.co.jp/ja/company/terms/)も必ずご覧ください。
-
-```python
-import asyncio
-from keihan_tracker.delay_tracker import get_yahoo_delay
-
-async def main():
-    # エリアコードを指定可能（デフォルト6=近畿）
-    delays = await get_yahoo_delay()
-    
-    print("【現在の運行情報 (Yahoo!)】")
-    if not delays:
-        print("現在、目立った遅延情報はありません。")
-    
-    for info in delays:
-        print(f"・{info.LineName}: {info.status}")
-        print(f"  {info.detail}\n")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
-
-#### B. 駅すぱあと API
-駅すぱあとのAPIキーをお持ちの場合は、こちらを利用することでより安定して情報を取得できます。
-レスキューナウから提供されている信頼性の高い運行情報を使用できます。
-
-```python
-import asyncio
-from keihan_tracker.delay_tracker import get_ekispert_delay
-
-async def main():
-    # APIキーを指定して取得
-    # prefs引数で都道府県コードを指定可能（デフォルトは京都・大阪・兵庫）
-    delays = await get_ekispert_delay(api_key="YOUR_API_KEY")
-    
-    print("【現在の運行情報 (駅すぱあと)】")
-    for info in delays:
-        print(f"・{info.LineName}: {info.status}")
-        print(f"  {info.detail}\n")
-
-if __name__ == "__main__":
-    asyncio.run(main())
-```
+### 5. 運行情報（遅延情報）
+運行情報の機能（`get_ekispert_delay`・`DelayLine`）は v2.7.0 で削除しました。
+各社の公式サイトの運行情報は、物理部の別のライブラリ [train_operation_info](https://github.com/dk-butsuri/train_operation_info) で取得できます。
 
 ## 知っておくべき仕様・注意点 (ハマりポイント)
 
@@ -301,7 +245,7 @@ if __name__ == "__main__":
 ```python
 KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 ```
-`rate_limit`: `fetch_pos()` の最小呼び出し間隔（秒）。デフォルトは30秒。これよりも高頻度で実行すると、取得処理がスキップされる。
+`rate_limit`: `fetch_pos()` の最小呼び出し間隔（秒）。デフォルトは30秒で、15秒未満を指定すると `ValueError` になる（公式の位置情報は1分ごとにしか更新されないため）。これよりも高頻度で実行すると、取得処理がスキップされる。
 
 `snapshot_dir`: デバッグ用。指定すると、APIから取得したレスポンスをそのまま `snapshot_dir/YYYYMMDD/HHMMSS.mmm_ファイル名.gz` に保存する。前回と内容が同じ場合は保存しない。パースに失敗したレスポンスも保存されるため、表示がおかしかったときに原因のデータを後から確認できる。古いファイルは自動では削除されないので、必要に応じて手動で整理すること。
 
@@ -436,14 +380,6 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
     *   `status: str`: 運行状況テキスト
     *   `timetable: str`: 到着予定時刻など
     *   `lat`, `lon`: バスの現在座標
-
-### DelayLine (遅延情報)
-Yahoo!路線情報または駅すぱあとから取得した遅延情報モデル。**非推奨**（[運行情報の取得](#5-運行情報遅延情報の取得非推奨)を参照）。
-
-*   `LineName: str`: 路線名 (例: "京阪本線")
-*   `status: str`: 状態概要 (例: "遅延")
-*   `detail: str`: 詳細な遅延理由や状況のテキスト
-*   `AnnouncedTime: datetime`: 運行情報の発表時刻
 
 ### MultiLang
 多言語対応の文字列型。`station_name` や `delay_text` などで使われます。
