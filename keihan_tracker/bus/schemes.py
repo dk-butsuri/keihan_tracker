@@ -45,6 +45,7 @@ class BusState(BaseModel):
     html: Optional[str] = None
     html_sp: Optional[str] = None
     busstateprms: BusStatePrms
+    dgmpl: Optional[str] = None  # この便の発着時刻表を fetch_diagram で取得するための値
 
     @model_validator(mode="before")
     def parse_prms(cls, values):
@@ -59,3 +60,20 @@ class Body(BaseModel):
 class BusLocationResponse(BaseModel):
     head: Head
     body: Body
+
+
+class BusDiagramStop(BaseModel):
+    """発着時刻表の1停留所。時刻は24時以降も扱える HH:MM 文字列。"""
+
+    stop_name: str
+    arrival_time: Optional[str] = None
+    departure_time: Optional[str] = None
+    arrival_is_estimated: bool = False
+    departure_is_estimated: bool = False
+
+
+class BusDiagram(BaseModel):
+    """指定した便の発着時刻表。stops は運行順で、同名の停留所も別々に保持する。"""
+
+    dgmpl: str
+    stops: List[BusDiagramStop]

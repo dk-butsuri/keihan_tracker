@@ -1,0 +1,10 @@
+[
+  {
+    "file": "busstateupd.json.gz",
+    "sha256": "3fb584728dd50583965c13092757703132e84aee2acdd46a80ec538d95cebe88"
+  },
+  {
+    "file": "linediagram.html.gz",
+    "sha256": "b08ae1ec2522f06f4bf46da35ebbe52e413894b9c6893bded6402b62e6f8b4f2"
+  }
+]

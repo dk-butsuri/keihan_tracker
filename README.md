@@ -178,7 +178,7 @@ def estimate_arrival(train: ActiveTrainData, station: StationData):
 
 ```python
 import asyncio
-from keihan_tracker.bus.tracker import get_khbus_info
+from keihan_tracker.bus.tracker import fetch_diagram, get_khbus_info
 
 async def main():
     # バス停名と番号を指定（番号はのりばや方向によって異なります）
@@ -193,9 +193,22 @@ async def main():
         print(f"  現在地: 緯度{prms.lat}, 経度{prms.lon}")
         print("\n")
 
+    # 先頭の1便について「終点までの発着時刻表」を別途取得する
+    if bus_info.body.busstates:
+        bus = bus_info.body.busstates[0]
+        if bus.dgmpl is not None:
+            diagram = await fetch_diagram(bus.dgmpl)
+            for stop in diagram.stops:
+                print(f"{stop.stop_name}: 着 {stop.arrival_time} / 発 {stop.departure_time}")
+
 if __name__ == "__main__":
     asyncio.run(main())
 ```
+
+各便の `dgmpl` は、接近情報の HTML 内の `bus_key` から公式ページのボタンと同じ方法で組み立てます。
+キーがない場合は `None` です。接近情報を取るだけでは、発着時刻表への追加の通信は発生しません。
+`fetch_diagram()` は同じ `dgmpl` の結果を30秒間キャッシュします。
+時刻は公式の発着時刻表の値で、遅延を加算しません。`△` が付く推定時刻はフラグで区別します。
 
 ## 表示する側（サイネージなど）でやること
 
@@ -385,12 +398,25 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 バス接近情報のレスポンスモデル。
 
 *   `BusLocationResponse.body.busstates`: `BusState` のリスト
+*   `BusState.dgmpl: Optional[str]`: この便の `fetch_diagram(dgmpl)` に渡す値。HTML にキーがなければ `None`
 *   `BusState.busstateprms`: 詳細情報オブジェクト
     *   `route: str`: 系統番号 (例: "[22]")
     *   `destination: str`: 行先
     *   `status: str`: 運行状況テキスト
     *   `timetable: str`: 到着予定時刻など
     *   `lat`, `lon`: バスの現在座標
+
+### BusDiagram / BusDiagramStop (バスの発着時刻表)
+
+*   `BusDiagram.dgmpl: str`: 問い合わせに使った値
+*   `BusDiagram.stops: list[BusDiagramStop]`: 運行順の停留所。同名の停留所を複数回通る場合も別々に保持
+    *   `stop_name: str`: 公式の表示名（`〔京阪バス〕` などを含む）
+    *   `arrival_time: Optional[str]`: 着時刻。例 `"17:18"`。始発などで記載がない場合は `None`
+    *   `departure_time: Optional[str]`: 発時刻。例 `"17:20"`。終点などで記載がない場合は `None`
+    *   `arrival_is_estimated: bool` / `departure_is_estimated: bool`: 公式の時刻に `△` が付いているか
+
+時刻は日付を含まない文字列です。24時以降の表記も保持します。
+通信の失敗は `httpx.HTTPError`、発着時刻表がない場合や HTML の形式が想定と違う場合は `KeihanAPIError` です。
 
 ### MultiLang
 多言語対応の文字列型。`station_name` や `delay_text` などで使われます。
@@ -439,6 +465,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 | `www.keihan.co.jp/zaisen-up/trainPositionList.json` | 列車位置・遅延 | `fetch_pos()` のたび（`rate_limit` 秒に1回まで） |
 | `www.keihan.co.jp/zaisen-up/startTimeList.json` | ダイヤ・時刻 | 原則1時間に1回（変わっていなければ `304 Not Modified`） |
 | `busnavi.keihanbus.jp/pc/busstateupd` | バスの接近情報 | `get_khbus_info()` のたび（同じバス停は30秒間キャッシュ） |
+| `busnavi.keihanbus.jp/pc/linediagram` | 指定したバス1便の発着時刻表 | `fetch_diagram(dgmpl)` を呼んだときだけ（同じ `dgmpl` は30秒間キャッシュ） |
 
 *   **名乗ってアクセスします**：リクエストの User-Agent は `keihan_tracker (+https://github.com/dk-butsuri/keihan_tracker)` です。ブラウザのふりはしません。
 *   **取得の間隔に下限があります**：`rate_limit` は既定で30秒、15秒未満は指定できません。公式の位置情報は1分ごとにしか更新されないため、それより短くしても新しい情報は増えません。
