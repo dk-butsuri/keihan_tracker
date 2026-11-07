@@ -767,7 +767,7 @@ class KHTracker:
     """
     京阪電車のリアルタイム列車位置情報を管理するメインクラス。
     - stations: 全駅の辞書（駅番号:StationData）
-    - trains: 全列車の辞書（列車管理番号:TrainData）
+    - trains: 全列車の辞書（WDF番号:TrainData）
     - fetch_pos, fetch_dia でAPIから最新情報取得
     - snapshot_dir を指定すると、取得したAPIレスポンスをそのまま保存する（デバッグ用）
     """
