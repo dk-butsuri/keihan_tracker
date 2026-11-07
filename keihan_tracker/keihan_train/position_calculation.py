@@ -36,21 +36,8 @@ def calc_position(col: int, row: int) -> tuple[LineLiteral, int, Optional[int]]:
             current_station = 42 - block_index
             pos_in_block = (row - 1) % 3  # 0:Top, 1:Mid, 2:Bot
             
-            is_stopped = False
-            
-            # 基本: Top(0)は停車
+            # 各ブロックの先頭行が駅内。big-area は余白の指定で、駅内を意味しない
             if pos_in_block == 0:
-                is_stopped = True
-            
-            # 特例: 2行目(Mid)以降も停車扱いになる駅 (HTMLの big-area/special-area 等に基づく)
-            # 出町柳(42): Row 2も停車
-            if current_station == 42 and pos_in_block == 1: is_stopped = True
-            # 枚方市(21): Row 65(Mid)も停車
-            if current_station == 21 and pos_in_block == 1: is_stopped = True
-            # 京橋(4): Row 116(Mid)も停車
-            if current_station == 4 and pos_in_block == 1: is_stopped = True
-            
-            if is_stopped:
                 return (line, current_station, None)
             else:
                 # 移動中 (当駅 -> 次駅)
@@ -58,30 +45,36 @@ def calc_position(col: int, row: int) -> tuple[LineLiteral, int, Optional[int]]:
                 return (line, current_station, current_station - 1)
 
         # A-2. 地下・中之島線区間 (Row 118-131)
-        # この区間はHTML上隙間なく special-area が続くため、すべて停車扱いとする
+        # 通常駅は先頭行が駅内、続く2行が駅間。終端の複数行だけは駅内となる
         else:
-            # 共通: 天満橋(3) Row 118-120
-            if row <= 120: return (line, 3, None)
-
             if line == "中之島線":
-                if row <= 123: return (line, 51, None) # なにわ橋
-                elif row <= 126: return (line, 52, None) # 大江橋
-                elif row <= 129: return (line, 53, None) # 渡辺橋
-                else: return (line, 54, None) # 中之島
+                # 中之島の番線枠は Row 130・131
+                if row >= 130:
+                    return (line, 54, None)
+                stations = (3, 51, 52, 53, 54)
+                block_index, pos_in_block = divmod(row - 118, 3)
+                current_station = stations[block_index]
+                next_station = None if pos_in_block == 0 else stations[block_index + 1]
+                return (line, current_station, next_station)
             
             else: # 京阪本線 大阪側
-                if row <= 123: return (line, 2, None) # 北浜
-                elif row <= 126: return (line, 1, None) # 淀屋橋
-                # Row 127以降は本線には無し
-                else: raise ValueError(f"Invalid row {row} for Main Line")
+                # 淀屋橋の番線枠は Row 124・125。Row 126以降は枠外
+                if row >= 126:
+                    raise ValueError(f"Invalid row {row} for Main Line")
+                if row >= 124:
+                    return (line, 1, None)
+                block_index, pos_in_block = divmod(row - 118, 3)
+                current_station = 3 - block_index
+                next_station = None if pos_in_block == 0 else current_station - 1
+                return (line, current_station, next_station)
 
     # === B. 宇治線 (Row 132-153) ===
     elif row <= 153:
         # 中書島(28) Row 132-134 (始発)
         if row <= 134:
-            # HTML: 132(special), 133(big) -> 停車
+            # Row 132が駅内、133・134は観月橋との駅間
             pos = row - 132
-            if pos <= 1: return (line, 28, None)
+            if pos == 0: return (line, 28, None)
             else: return (line, 28, 71) # 発車
             
         # 終点: 宇治(77)
@@ -102,9 +95,9 @@ def calc_position(col: int, row: int) -> tuple[LineLiteral, int, Optional[int]]:
     elif row <= 175:
         # 枚方市(21) Row 154-156 (始発)
         if row <= 156:
-            # HTML: 154(special), 155(big) -> 停車
+            # Row 154が駅内、155・156は宮之阪との駅間
             pos = row - 154
-            if pos <= 1: return (line, 21, None)
+            if pos == 0: return (line, 21, None)
             else: return (line, 21, 61) # 発車
             
         # 終点: 私市(67)

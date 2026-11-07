@@ -16,33 +16,47 @@ KATANO = "交野線"
     [
         # 京阪本線: 1ブロック3行、Top行が停車
         (3, 1, (HONSEN, 42, None)),   # 出町柳
-        (3, 2, (HONSEN, 42, None)),   # 出町柳はMid行も停車
+        (3, 2, (HONSEN, 42, 41)),
         (3, 3, (HONSEN, 42, 41)),
         (3, 4, (HONSEN, 41, None)),   # 神宮丸太町
         (3, 5, (HONSEN, 41, 40)),
         (3, 6, (HONSEN, 41, 40)),
         (3, 64, (HONSEN, 21, None)),  # 枚方市
-        (3, 65, (HONSEN, 21, None)),  # 枚方市はMid行も停車
+        (3, 65, (HONSEN, 21, 20)),
+        (5, 65, (HONSEN, 21, 20)),
         (3, 66, (HONSEN, 21, 20)),
         (3, 115, (HONSEN, 4, None)),  # 京橋
-        (3, 116, (HONSEN, 4, None)),  # 京橋はMid行も停車
+        (3, 116, (HONSEN, 4, 3)),
         (3, 117, (HONSEN, 4, 3)),
-        # 地下区間はすべて停車扱い
+        # 地下区間も先頭行が駅内、続く2行は駅間
         (3, 118, (HONSEN, 3, None)),  # 天満橋
-        (3, 120, (HONSEN, 3, None)),
+        (3, 119, (HONSEN, 3, 2)),
+        (4, 120, (HONSEN, 3, 2)),
         (3, 121, (HONSEN, 2, None)),  # 北浜
-        (3, 126, (HONSEN, 1, None)),  # 淀屋橋
+        (3, 122, (HONSEN, 2, 1)),
+        (4, 123, (HONSEN, 2, 1)),
+        (3, 124, (HONSEN, 1, None)),  # 淀屋橋の番線枠は2行
+        (4, 125, (HONSEN, 1, None)),
         # 中之島線（col 1,2）
         (1, 118, (NAKANOSHIMA, 3, None)),
+        (1, 119, (NAKANOSHIMA, 3, 51)),
+        (2, 120, (NAKANOSHIMA, 3, 51)),
         (1, 121, (NAKANOSHIMA, 51, None)),  # なにわ橋
+        (1, 122, (NAKANOSHIMA, 51, 52)),
+        (2, 123, (NAKANOSHIMA, 51, 52)),
         (2, 124, (NAKANOSHIMA, 52, None)),  # 大江橋
+        (1, 125, (NAKANOSHIMA, 52, 53)),
+        (2, 126, (NAKANOSHIMA, 52, 53)),
         (1, 127, (NAKANOSHIMA, 53, None)),  # 渡辺橋
+        (1, 128, (NAKANOSHIMA, 53, 54)),
+        (2, 129, (NAKANOSHIMA, 53, 54)),
+        (1, 130, (NAKANOSHIMA, 54, None)),  # 中之島の番線枠も2行
         (2, 131, (NAKANOSHIMA, 54, None)),  # 中之島
         # col 1,2 でも117行目までは本線扱い
         (1, 117, (HONSEN, 4, 3)),
         # 宇治線
         (3, 132, (UJI, 28, None)),  # 中書島
-        (3, 133, (UJI, 28, None)),
+        (3, 133, (UJI, 28, 71)),
         (3, 134, (UJI, 28, 71)),
         (3, 135, (UJI, 71, None)),  # 観月橋
         (3, 136, (UJI, 71, 72)),
@@ -51,7 +65,7 @@ KATANO = "交野線"
         (3, 153, (UJI, 77, None)),  # 宇治
         # 交野線
         (3, 154, (KATANO, 21, None)),  # 枚方市
-        (3, 155, (KATANO, 21, None)),
+        (3, 155, (KATANO, 21, 61)),
         (3, 156, (KATANO, 21, 61)),
         (3, 157, (KATANO, 61, None)),  # 宮之阪
         (3, 158, (KATANO, 61, 62)),
@@ -71,6 +85,9 @@ def test_calc_position(col, row, expected):
         (3, 176),
         (0, 50),
         (6, 50),
+        (3, 126),  # 淀屋橋の番線枠より下は無効
+        (4, 126),
+        (5, 126),
         (3, 127),  # 本線にRow127以降は無い
     ],
 )
@@ -91,7 +108,7 @@ LINE_ORDER = {
 def _valid_cells():
     for row in range(1, 176):
         for col in range(1, 6):
-            if 127 <= row <= 131 and col not in (1, 2):
+            if 126 <= row <= 131 and col not in (1, 2):
                 continue  # 本線に存在しない領域
             yield col, row
 

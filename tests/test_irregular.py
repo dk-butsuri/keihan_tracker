@@ -62,6 +62,21 @@ def test_direction_glitch_corrected(api, fresh_tracker):
         assert train.next_station.station_name.ja == next_station, n
 
 
+def test_departure_from_kyobashi(api, fresh_tracker):
+    """保存済みの京橋出発前後の位置情報で、駅内から駅間への変化を確認する。"""
+    for n, row, at_station in [(1, 115, True), (2, 116, False)]:
+        api.responses[POSITION_PATH] = _position(f"position_direction_glitch_{n}.json")
+        run(fresh_tracker.fetch_pos())
+        train = fresh_tracker.trains[364]
+        assert isinstance(train, ActiveTrainData)
+        assert train.location_row == row
+        assert train.is_at_station is at_station
+        assert train.history[-1].is_at_station is at_station
+        if not at_station:
+            assert train.is_stopping is False
+            assert train.next_station.station_number == 3  # 天満橋
+
+
 # ---------------------------------------------------------------- 行先なし(00)
 
 

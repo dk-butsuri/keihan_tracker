@@ -168,6 +168,7 @@ class TrainHistoryRecord:
     fetch_pos で更新した後の値なので、最新の1件は列車の今の値と一致する。
     1日分を残すため、軽い dataclass にしている（BaseModel の8分の1ほど）。
     """
+    master: "KHTracker"
     file_created_time:  datetime.datetime           # その位置情報の fileCreatedTime（取得した時刻ではない）
     location_col:       int
     location_row:       int
@@ -182,11 +183,21 @@ class TrainHistoryRecord:
         return line
 
     @property
+    def stopping_station(self) -> Optional[StationData]:
+        _, st1, st2 = calc_position(self.location_col, self.location_row)
+        if st2:
+            return None
+        else:
+            return self.master.stations[st1]
+
+    @property
     def is_at_station(self) -> bool:
         """その時点で駅の位置座標にいたか"""
         _, _, st2 = calc_position(self.location_col, self.location_row)
         return not st2
-
+    
+    # masterの型を許可する
+    model_config = {"arbitrary_types_allowed": True}
 
 class StopStationData(BaseModel):
     """
@@ -504,6 +515,7 @@ class ActiveTrainData(TrainData):
         if self.history and self.history[-1].file_created_time == file_created_time:
             return
         self.history.append(TrainHistoryRecord(
+            master=self.master, 
             file_created_time = file_created_time,
             location_col = self.location_col,
             location_row = self.location_row,
@@ -556,6 +568,55 @@ class ActiveTrainData(TrainData):
             return False
         
         return self.next_stop_station == self.start_station
+
+    @property
+    def estimated_delay_minutes(self) -> int:
+        """
+        0から120分ならdelay_minutesの値を返し、
+        120分を超えた場合は遅延分数の最小値を推定します。
+        """
+        # 120分以内なら公式の値を用いる
+        official_delay_minutes = self.delay_minutes
+        if official_delay_minutes < 120 or self.next_stop_station is None:
+            return official_delay_minutes
+
+        min_delay:list[int] = []
+        min_delay.append(official_delay_minutes)
+
+        # 停車中なら：その駅の実際の到着時刻と定刻の到着時刻の差を算出（最低遅延分数）
+        if self.is_stopping is True:
+            scheduled_time = self.get_stop_time(self.next_station)
+
+            # その駅にいつから止まっているか
+            actual_arrived_time:Optional[datetime.datetime] = None
+            first_obs_index = None
+            for record in self.history:
+                if record.location_col == self.location_col and record.location_row == self.location_row:
+                    first_obs_index = self.history.index(record)
+                    break
+                continue
+
+            # 0番目でないなら前の要素もある
+            if first_obs_index is not None and first_obs_index > 0:
+                actual_arrived_time = self.history[first_obs_index-1].file_created_time
+
+            if actual_arrived_time and scheduled_time:
+                min_delay.append(int((actual_arrived_time - scheduled_time).total_seconds() // 60))
+
+        # 次の駅の定刻停車時刻と現在の時刻の差（最低遅延分数）
+        if self.is_stopping is False:
+            next_stop_scheduled_time = [i for i in self.route_stations if i.station == self.next_stop_station][0].time
+            
+        else:
+            current_station = self.next_station
+            current_stopstationdata = [i for i in self.stop_stations if i.station == current_station][0]
+            next_stop_scheduled_time = None
+            if len(self.stop_stations)-1 >= self.stop_stations.index(current_stopstationdata)+1:
+                next_stop_scheduled_time = self.stop_stations[self.stop_stations.index(current_stopstationdata)+1].time
+        if next_stop_scheduled_time and self.master.position_created_at:
+            min_delay.append(int((self.master.position_created_at - next_stop_scheduled_time).total_seconds() // 60))
+
+        return max(min_delay)
 
     @property
     def staying_time(self) -> datetime.timedelta:
