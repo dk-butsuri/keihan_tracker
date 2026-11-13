@@ -8,103 +8,36 @@ if __name__ == "__main__":
     exit()
 
 from .schemes import (TransferGuideInfo,
-                      FileList,  
-                      SelectStation, 
-                      startTimeList, 
-                      trainPositionList, 
-                      StationConnections, 
-                      MultiLang, 
+                      FileList,
+                      SelectStation,
+                      startTimeList,
+                      trainPositionList,
+                      StationConnections,
+                      MultiLang,
                       TrainType,
                       LineLiteral,
                       )
 from . import stations_map
 from .position_calculation import calc_position
-from pydantic import AliasChoices, BaseModel, Field
-import warnings
-from typing import Optional, Literal, Sequence, TypeVar
-from httpx import AsyncClient, Response
+# KeihanAPIError・write_snapshot・USER_AGENT・JST などは、これまでどおり tracker からも import できる
+from .parse import (KeihanAPIError, _parse, _parse_delay_minutes,
+                    parse_select_station, parse_transfer_guide, parse_timetable, parse_positions,
+                    SELECT_STATION_URL, TRANSFER_GUIDE_URL, START_TIME_LIST_URL, TRAIN_POSITION_URL)
+from .client import KHClient, USER_AGENT, write_snapshot
+from .state import KHState, JST, DATE_CHANGE_TIME, _deprecated
+from pydantic import AliasChoices, BaseModel, Field, field_validator
+from typing import Optional, Literal, Sequence
+from httpx import AsyncClient
 from pathlib import Path
-import asyncio
 import dataclasses
-import gzip
-import json
 import xml.etree.ElementTree as ET
 from tabulate import tabulate
 import datetime
-import re
-from zoneinfo import ZoneInfo
 
-JST = ZoneInfo("Asia/Tokyo")
-# 営業日が変わる時刻。終電（2時ごろまで）と、始発前に列車が現れる4時半ごろの間
-DATE_CHANGE_TIME = 4
 # 日付が変わったあと、ダイヤが今日のものだと確かめられなくても、取得のたびの取り直しをやめる時刻（安全装置）
 DIA_RETRY_DEADLINE = datetime.time(5, 30)
 # fetch_pos の間隔の下限（秒）。公式の位置情報は1分ごとにしか更新されないため、これより短くしても新しい情報は増えない
 MIN_RATE_LIMIT = 15
-# 京阪のサーバーから、どこのプログラムのアクセスか分かるように名乗る
-USER_AGENT = "keihan_tracker (+https://github.com/dk-butsuri/keihan_tracker)"
-
-
-class KeihanAPIError(ValueError):
-    """
-    公式APIが読み込めないデータ（壊れたJSON・想定外の形式）を返したことを表す例外。
-    末尾にNULが付く、本文が途中で切れる、などが実際に起きている。
-    列車の状態は読み込めた分まで更新されているので、次の取得で再試行すればよい。
-    """
-
-
-_Model = TypeVar("_Model", bound=BaseModel)
-
-
-def _parse(model: type[_Model], text: str, url: str) -> _Model:
-    try:
-        return model.model_validate(json.loads(text))
-    except ValueError as e: # json.JSONDecodeError, pydantic.ValidationError
-        raise KeihanAPIError(f"{url} を読み込めませんでした: {e}") from e
-
-
-async def write_snapshot(snapshot_dir: Path, name: str, body: bytes, last: dict[str, bytes]) -> None:
-    """
-    取得したレスポンスを snapshot_dir/YYYYMMDD/HHMMSS.mmm_name.gz に保存する（デバッグ用）。
-    last[name] と同じ内容なら保存しない。保存できたら last[name] を更新する。
-    """
-    if last.get(name) == body:
-        return
-    now = datetime.datetime.now(JST)
-    path = snapshot_dir / now.strftime("%Y%m%d") / f"{now:%H%M%S}.{now.microsecond // 1000:03}_{name}.gz"
-
-    def write() -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(gzip.compress(body))
-
-    # 保存の失敗で取得を止めない
-    try:
-        await asyncio.to_thread(write)
-    except OSError as e:
-        warnings.warn(f"スナップショットの保存に失敗しました: {e}")
-        return
-    last[name] = body
-
-
-def _parse_delay_minutes(text: str) -> int:
-    """
-    delayMinutes（"3分遅れ"、"2時間以上"、""）を分に直す。
-    120分以上の遅れは "2時間以上" としか来ないので、下限の120分とする。
-    見たことのない表記は、取得を止めないよう警告を出して0とする。
-    """
-    if text == "":
-        return 0
-    if text == "2時間以上":
-        return 120
-    if m := re.fullmatch(r"(\d+)分遅れ", text):
-        return int(m[1])
-    warnings.warn(f"遅延の表記を読めませんでした: {text!r}")
-    return 0
-
-
-def _deprecated(old: str, new: str) -> None:
-    """v3 で削除・改名する名前を使ったときの警告。new に書き換え先を書く"""
-    warnings.warn(f"{old} は v3 で削除します。{new}", DeprecationWarning, stacklevel=3)
 
 
 class DiaNotFoundError(ValueError):
@@ -145,7 +78,12 @@ class TrainPosition:
     line:    LineLiteral
 
 
-def _calc_train_position(master: "KHTracker", col: int, row: int, direction: Literal["up","down"]) -> TrainPosition:
+def _unwrap_master(master):
+    """master に KHTracker が渡されたら、その状態（KHState）を使う（v2 では master は KHTracker だったため）"""
+    return master.state if isinstance(master, KHTracker) else master
+
+
+def _calc_train_position(master: "KHState", col: int, row: int, direction: Literal["up","down"]) -> TrainPosition:
     line, st1, st2 = calc_position(col, row)
     if not st2:
         order = _line_order(line, direction)
@@ -174,11 +112,16 @@ class StationData(BaseModel):
     """
     駅情報を表すモデル。
     """
-    master:        "KHTracker" #親インスタンス
+    master:        "KHState" #親インスタンス
     line:           set[LineLiteral]
     station_number: int
     station_name:   MultiLang
     transfer:       StationConnections = StationConnections()
+
+    @field_validator("master", mode="before")
+    @classmethod
+    def _master_to_state(cls, master):
+        return _unwrap_master(master)
 
     @property
     def arriving_trains(self):
@@ -277,7 +220,7 @@ class TrainHistoryRecord:
     fetch_pos で更新した後の値なので、最新の1件は列車の今の値と一致する。
     1日分を残すため、軽い dataclass にしている（BaseModel の8分の1ほど）。
     """
-    master: "KHTracker"
+    master: "KHState"
     file_created_time:  datetime.datetime           # その位置情報の fileCreatedTime（取得した時刻ではない）
     location_col:       int
     location_row:       int
@@ -332,7 +275,7 @@ class TrainData(BaseModel):
     - 列車番号、種別、編成、行先、停車駅リストなどを保持
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
     """
-    master:     "KHTracker"
+    master:     "KHState"
     # WDF番号（その日の列車を区別する番号）。v2.8 までの wdfBlockNo= でも作れる
     wdf:int = Field(validation_alias=AliasChoices("wdf", "wdfBlockNo"))
     date:datetime.date
@@ -347,6 +290,11 @@ class TrainData(BaseModel):
     actual_direction: Optional[Literal["up","down"]] = None
     actual_destination: Optional[StationData] = None
     actual_line: Optional[LineLiteral] = None
+
+    @field_validator("master", mode="before")
+    @classmethod
+    def _master_to_state(cls, master):
+        return _unwrap_master(master)
 
     @property
     def has_dia(self) -> bool:
@@ -880,9 +828,27 @@ class ActiveTrainData(TrainData):
     # masterの型を許可する
     model_config = {"arbitrary_types_allowed": True}
 
+def _state_property(name: str, doc: str = "") -> property:
+    """KHState の属性を、KHTracker から同じ名前で読み書きできるようにする"""
+    def getter(self: "KHTracker"):
+        return getattr(self.state, name)
+    def setter(self: "KHTracker", value) -> None:
+        setattr(self.state, name, value)
+    return property(getter, setter, doc=doc)
+
+
+def _client_property(name: str, doc: str = "") -> property:
+    """KHClient の属性を、KHTracker から同じ名前で読み書きできるようにする"""
+    def getter(self: "KHTracker"):
+        return getattr(self.client, name)
+    def setter(self: "KHTracker", value) -> None:
+        setattr(self.client, name, value)
+    return property(getter, setter, doc=doc)
+
+
 class KHTracker:
     """
-    京阪電車のリアルタイム列車位置情報を管理するメインクラス。
+    京阪電車のリアルタイム列車位置情報を管理するメインクラス。KHClient（取得）と KHState（状態）を合わせたもの。
     - stations: 全駅の辞書（駅番号:StationData）
     - trains: 全列車の辞書（WDF番号:TrainData）
     - fetch_pos, fetch_dia でAPIから最新情報取得
@@ -891,56 +857,52 @@ class KHTracker:
     def __init__(self, rate_limit:float = 30, snapshot_dir: Optional[str | Path] = None) -> None:
         if rate_limit < MIN_RATE_LIMIT:
             raise ValueError(f"rate_limit は {MIN_RATE_LIMIT} 秒以上にしてください（指定値: {rate_limit}）。")
-        #パースしたJSONデータ（BaseModel）
-        self.transfer_guide_info: Optional[TransferGuideInfo] = None # 駅ごとの乗り入れデータ
-        self.select_station: Optional[SelectStation] = None          # 路線ごとの駅名データ
-        self.starttime_list: Optional[startTimeList] = None          # 列車ごとの駅到着時刻データ
-        self.train_position_list: Optional[trainPositionList] = None # 列車の種別・位置・遅延情報データ
-        self.file_list: Optional[FileList] = None
-        self.date: datetime.date = datetime.datetime.now(JST).date()   # 日度（始発から終電までを1日とする日付）
+        date: datetime.date = datetime.datetime.now(JST).date()   # 日度（始発から終電までを1日とする日付）
         # 深夜帯は-1日することで27時の扱い
         if 0 <= datetime.datetime.now(JST).hour < DATE_CHANGE_TIME:
-            self.date = self.date - datetime.timedelta(days=1)
-        
-        self.web = AsyncClient(headers={"User-Agent": USER_AGENT})
+            date = date - datetime.timedelta(days=1)
+        self.client = KHClient(snapshot_dir)
+        self.state = KHState(date)
+        self.file_list: Optional[FileList] = None
+
         self.last_fetch_pos_datetime: Optional[datetime.datetime] = None # 最後にfetch_posを行った時刻
         self.last_regist_dia_datetime: Optional[datetime.datetime] = None # 最後にregist_diaでfetchした時刻
         self.last_regist_dia_date: Optional[datetime.date] = None
-        self.dia_confirmed_date: Optional[datetime.date] = None # ダイヤが今日のものだと確かめた営業日
-        self._first_observed_date: Optional[datetime.date] = None
-        self._first_observed_time: Optional[datetime.datetime] = None # その営業日に最初に位置情報を取れた時刻（fileCreatedTime）
         self.rate_limit_interval:float = rate_limit                      # アクセス間隔
-        # 取得したレスポンスの保存先（Noneなら保存しない）
-        self.snapshot_dir: Optional[Path] = Path(snapshot_dir) if snapshot_dir is not None else None
-        self._last_snapshot: dict[str, bytes] = {}                       # ファイル名:前回保存した内容
-        self._etags: dict[str, str] = {}                                 # URL:前回受け取ったETag
-        # WDF番号:TrainData
-        ## 現在アクティブな列車リスト
-        self.trains:dict[int, TrainData|ActiveTrainData] = {}
-        ## 駅リスト
-        self.stations:dict[int, StationData] = {}
+
+    # KHState の属性。代入もできる
+    transfer_guide_info = _state_property("transfer_guide_info")  # 駅ごとの乗り入れデータ
+    select_station = _state_property("select_station")           # 路線ごとの駅名データ
+    starttime_list = _state_property("starttime_list")           # 列車ごとの駅到着時刻データ
+    train_position_list = _state_property("train_position_list") # 列車の種別・位置・遅延情報データ
+    date = _state_property("date")                               # 日度（始発から終電までを1日とする日付）
+    dia_confirmed_date = _state_property("dia_confirmed_date")   # ダイヤが今日のものだと確かめた営業日
+    _first_observed_date = _state_property("_first_observed_date")
+    _first_observed_time = _state_property("_first_observed_time") # その営業日に最初に位置情報を取れた時刻（fileCreatedTime）
+    trains = _state_property("trains")                           # WDF番号:TrainData
+    stations = _state_property("stations")                       # 駅番号:StationData
+
+    # KHClient の属性。代入もできる
+    web = _client_property("web")                                # 代入すると、取得に使う AsyncClient が替わる
+    snapshot_dir = _client_property("snapshot_dir")              # 取得したレスポンスの保存先（Noneなら保存しない）
+    _last_snapshot = _client_property("_last_snapshot")          # ファイル名:前回保存した内容
+    _etags = _client_property("_etags")                          # URL:前回受け取ったETag
 
     @property
     def position_created_at(self) -> Optional[datetime.datetime]:
         """手元の位置情報の作成時刻（fileCreatedTime）。取得に失敗しても変わらないので、データの古さの判断に使う"""
-        if self.train_position_list is None:
-            return None
-        return self.train_position_list.fileCreatedTime
+        return self.state.position_created_at
 
     @property
     def active_trains(self) -> dict[int, ActiveTrainData]:
-        d:dict[int, ActiveTrainData] = {}
-        for train in self.trains.values():
-            if isinstance(train, ActiveTrainData):
-                d[train.wdf] = train
-        return d
+        return self.state.active_trains
 
     def find_trains(
-            self, 
+            self,
             active:         Optional[bool] = None,
-            train_type:           Optional[TrainType] = None, 
-            direction:      Optional[Literal["up","down"]] = None, 
-            is_special:     Optional[bool] = None, 
+            train_type:           Optional[TrainType] = None,
+            direction:      Optional[Literal["up","down"]] = None,
+            is_special:     Optional[bool] = None,
             train_number:   Optional[str] = None,
             has_premiumcar: Optional[bool] = None,
             destination:    Optional[StationData] = None,
@@ -951,62 +913,18 @@ class KHTracker:
             line:           Optional[LineLiteral] = None,
             current_or_next_stop: Optional[StationData] = None,
             ) -> Sequence[TrainData]:
-        """
-        条件に合致する列車を検索してリストで返します。
-        - active: 走行中か
-        - type: 列車種別（例: "普通"）
-        - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）。予定の列車は始発・終着から推定した方向
-        - is_special: 臨時列車かどうか
-        - train_number: 列車番号（例: "2201"）
-        - has_premiumcar: プレミアムカー付きかどうか
-        - destination: 行き先駅
-        - current_or_next_stop: 停車中の駅 or 次の停車駅
-        - next_stop_station: 【非推奨】current_or_next_stop と同じ
-        - line: 路線。走行中の列車は今いる路線、走行中でない列車は TrainData.line（走ったことがあればそのときの路線、なければ停車駅から推定した路線）
-        is_special・train_number・current_or_next_stop・is_stopping は走行中の列車だけが持つ値のため、
-        指定すると走行中でない列車は当てはまりません。
-        """
+        """条件に合致する列車を検索してリストで返します。引数は KHState.find_trains を参照。"""
+        # 警告の発生元が呼び出し側になるよう、ここで警告してから渡す
         if next_stop_station is not None:
             _deprecated("find_trains の next_stop_station", "同じ意味の current_or_next_stop を使ってください。")
             if current_or_next_stop is None:
                 current_or_next_stop = next_stop_station
-        trains: list[TrainData|ActiveTrainData] = []
-        for train in self.trains.values():
-            # 条件に合致するかチェック
-            if active is not None       and isinstance(train, ActiveTrainData) != active:
-                continue
-            if train_type is not None   and train.train_type != train_type:
-                continue
-            if has_premiumcar is not None and train.has_premiumcar != has_premiumcar:
-                continue
-            if destination is not None  and train.destination != destination:
-                continue
-            if min_delay is not None    and train.delay_minutes <= min_delay:
-                continue
-            if max_delay is not None    and train.delay_minutes >= max_delay:
-                continue
-            if direction is not None    and train.direction != direction:
-                continue
-            if line is not None         and train.line != line:
-                continue
-
-            # 以下は走行中の列車だけが持つ値。指定されたら、走行中でない列車は当てはまらない
-            active_only = (current_or_next_stop, is_special, train_number, is_stopping)
-            if not isinstance(train, ActiveTrainData):
-                if any(v is not None for v in active_only):
-                    continue
-            else:
-                if current_or_next_stop is not None and train.current_or_next_stop != current_or_next_stop:
-                    continue
-                if is_special is not None and train.is_special != is_special:
-                    continue
-                if train_number is not None and train.train_number != train_number:
-                    continue
-                if is_stopping is not None and train._is_stopping() != is_stopping:
-                    continue
-            
-            trains.append(train)
-        return trains
+        return self.state.find_trains(
+            active=active, train_type=train_type, direction=direction, is_special=is_special,
+            train_number=train_number, has_premiumcar=has_premiumcar, destination=destination,
+            min_delay=min_delay, max_delay=max_delay, is_stopping=is_stopping, line=line,
+            current_or_next_stop=current_or_next_stop,
+        )
 
     def delay_growing_trains(
             self,
@@ -1018,72 +936,27 @@ class KHTracker:
         is_delay_growing(window, ratio) が True の走行中の列車を返します。
         - line: 指定すると、今その路線にいる列車だけを返す（find_trains の line と同じ）
         """
-        # active=True なので全部 ActiveTrainData。isinstance は型を絞るため
-        return [
-            train for train in self.find_trains(active=True, line=line)
-            if isinstance(train, ActiveTrainData) and train.is_delay_growing(window, ratio)
-        ]
-
+        return self.state.delay_growing_trains(line, window, ratio)
 
     async def _get(self, url: str) -> str:
         """URLを取得して本文を返す。snapshot_dirが指定されていれば保存もする。"""
-        res = await self._request(url, {})
-        return res.text
+        return await self.client._get(url)
 
     async def _get_if_modified(self, url: str) -> Optional[str]:
         """前回の取得から変わっていれば本文を返し、変わっていなければ（304 Not Modified）Noneを返す。"""
-        etag = self._etags.get(url)
-        res = await self._request(url, {"If-None-Match": etag} if etag else {})
-        if res.status_code == 304:
-            return None
-        return res.text
-
-    async def _request(self, url: str, headers: dict[str, str]) -> Response:
-        res = await self.web.get(url, headers=headers)
-        if res.status_code == 304:
-            return res
-        res.raise_for_status()
-        # 次回の条件付き取得のために覚えておく
-        if etag := res.headers.get("ETag"):
-            self._etags[url] = etag
-        if self.snapshot_dir is not None:
-            await self._save_snapshot(url.rsplit("/", 1)[-1], res.content)
-        return res
-
-    async def _save_snapshot(self, name: str, body: bytes) -> None:
-        """前回から内容が変わっていれば snapshot_dir/YYYYMMDD/HHMMSS.mmm_name.gz に保存する。"""
-        assert self.snapshot_dir is not None
-        await write_snapshot(self.snapshot_dir, name, body, self._last_snapshot)
+        return await self.client._get_if_modified(url)
 
     #動的データを更新
     async def fetch_pos(self):
         "列車走行位置を更新します。1分に1回が適切でしょう。"
         #不変データをダウンロード
         if not self.select_station:
-            url = "https://www.keihan.co.jp/zaisen/select_station.json"
-            self.select_station = _parse(SelectStation, await self._get(url), url)
-            # select_stationから駅データを登録
-            for line,line_detail in self.select_station.root.items():
-                for number, name in line_detail.stations.items():
-                    number = int(number[2:])
-                    # 既に登録されているなら路線に追加
-                    if number in self.stations:
-                        self.stations[number].line.add(line)
-                        continue
-                    self.stations[number] = StationData(
-                                                master = self,
-                                                line   = {line},
-                                                station_number = number,
-                                                station_name = name,
-                    )
+            url = SELECT_STATION_URL
+            self.state.apply_stations(select_station=parse_select_station(await self._get(url), url))
         if not self.transfer_guide_info:
-            url = "https://www.keihan.co.jp/zaisen/transferGuideInfo.json"
-            self.transfer_guide_info = _parse(TransferGuideInfo, await self._get(url), url)
-            # transferGuideInfoから乗り換え情報を登録
-            for number, transfers in self.transfer_guide_info.root.items():
-                number = int(number[2:])
-                self.stations[number].transfer = transfers
-        
+            url = TRANSFER_GUIDE_URL
+            self.state.apply_stations(transfer_guide_info=parse_transfer_guide(await self._get(url), url))
+
         # レート制限
         now = datetime.datetime.now(tz=JST)
         if self.last_fetch_pos_datetime:
@@ -1091,113 +964,13 @@ class KHTracker:
             next_fetch = self.last_fetch_pos_datetime + datetime.timedelta(seconds=self.rate_limit_interval)
             if now <= next_fetch:
                 return
-        
+
         # 列車位置を取得
         self.last_fetch_pos_datetime = now
         # 壊れていれば、列車の状態を変える前に KeihanAPIError で止まる
-        url = "https://www.keihan.co.jp/zaisen-up/trainPositionList.json"
-        self.train_position_list = _parse(trainPositionList, await self._get(url), url)
-
-        # 日付更新
-        if 0 <= self.train_position_list.fileCreatedTime.hour < DATE_CHANGE_TIME:
-            #深夜帯は-1日することで27時の扱い
-            self.date = self.train_position_list.fileCreatedTime.date() - datetime.timedelta(days=1)
-        else:
-            self.date = self.train_position_list.fileCreatedTime.date()
-        if self._first_observed_date != self.date:
-            self._first_observed_date = self.date
-            self._first_observed_time = self.train_position_list.fileCreatedTime
-
-        # 前日の列車があれば削除
-        old_wdfs: list[int] = []
-        for wdf, train in self.trains.items():
-            if train.date != self.date:
-                old_wdfs.append(wdf)
-        for wdf in old_wdfs:
-            del self.trains[wdf]
-
-        # もう運行終了したActiveTrainDataをinactive化する
-        # 1. 現在アクティブな列車集合を取得
-        current_wdfs:set[int] = set()
-        for trainlist in self.train_position_list.locationObjects:
-            for train in trainlist.trainInfoObjects:
-                current_wdfs.add(train.wdfBlockNo)
-
-        # 2. 差集合で もうアクティブでなくなった列車を計算
-        wdfs_to_delete = set([train for train in self.trains.keys()]) - current_wdfs
-        for wdf in wdfs_to_delete:
-            if isinstance(self.trains[wdf], ActiveTrainData):
-                self.trains[wdf] = self.active_trains[wdf].inactivate()
-
-        # trainPositionListから列車一覧を取得
-        for trainlist in self.train_position_list.locationObjects:
-            # 同じ場所に2編成以上ある場合（連結等）があるのでリスト形式
-            for train in trainlist.trainInfoObjects:
-                wdf = train.wdfBlockNo
-                # 存在しない/アクティブでないなら新規作成
-                if self.trains.get(wdf) == None or not isinstance(self.trains.get(wdf), ActiveTrainData):
-                    # 一度消えてまた走り出した列車は、それまでの履歴を引き継ぐ
-                    old = self.trains.get(wdf)
-                    new_active_train = ActiveTrainData(
-                        master=self, 
-                        history = old.history if old else [],
-                        wdf=wdf,
-                        date=self.date,
-                        train_number = train.trainNumber,
-                        destination = self.stations.get(train.destStationNumber),
-                        train_type = train.trainTypeJp,
-                        is_special = train.is_special,
-                        cars = train.carsOfTrain,
-                        # up:京都方面（京阪本線）、枚方市方面（交野線）、中書島方面（宇治線）
-                        # down: 大阪方面、私市方面、宇治方面
-                        direction = "up" if trainlist.trainDirection == 0 else "down",
-                        location_col = trainlist.locationCol,
-                        location_row = trainlist.locationRow,
-                        delay_text = MultiLang(
-                            ja = train.delayMinutes,
-                            en = train.delayMinutesEn,
-                            cn = train.delayMinutesZhCn,
-                            tw = train.delayMinutesZhTw,
-                            kr = train.delayMinutesKo
-                        ),
-                        delay_minutes = _parse_delay_minutes(train.delayMinutes),
-                        position_since = self.train_position_list.fileCreatedTime,
-                        )
-                    self.trains[wdf] = new_active_train
-                    new_active_train._record_history(self.train_position_list.fileCreatedTime)
-
-                elif type(self.trains[wdf]) == ActiveTrainData:
-                    # 可変の情報を更新
-                    active_train = self.active_trains[wdf]
-                    old_coordinate = (active_train.location_row, active_train.location_col)
-                    new_coordinate = (trainlist.locationRow, trainlist.locationCol)
-                    active_train.location_row = new_coordinate[0]
-                    active_train.location_col = new_coordinate[1]
-                    active_train.delay_text = MultiLang(
-                        ja = train.delayMinutes,
-                        en = train.delayMinutesEn,
-                        cn = train.delayMinutesZhCn,
-                        tw = train.delayMinutesZhTw,
-                        kr = train.delayMinutesKo
-                    )
-                    active_train.delay_minutes = _parse_delay_minutes(train.delayMinutes)
-
-                    # 行先を更新（運転整理で変わることがある）。行先なし(00)の間は直前の値を保つ
-                    if train.destStationNumber in self.stations:
-                        active_train.active_destination = self.stations[train.destStationNumber]
-
-                    # 方向を更新（出現直後の1分だけ誤った値になることがある）
-                    # ただし終点に停車中は次の運行の向きに変わるため、そのままにする
-                    station = active_train.position.station
-                    at_terminal = station is not None and station == active_train.destination
-                    if not at_terminal:
-                        active_train.active_direction = "up" if trainlist.trainDirection == 0 else "down"
-
-                    # 座標が変わったら、今の座標に来た時刻を更新する
-                    if old_coordinate != new_coordinate:
-                        active_train.position_since = self.train_position_list.fileCreatedTime
-
-                    active_train._record_history(self.train_position_list.fileCreatedTime)
+        url = TRAIN_POSITION_URL
+        self.state.apply_positions(parse_positions(await self._get(url), url))
+        assert self.train_position_list is not None
 
         #ダイア情報を登録
         # 始発前は、公式のダイヤがまだ前の日のままのことがある。日付が変わってから、
@@ -1226,15 +999,7 @@ class KHTracker:
         走行中の列車の公式の行先と、ダイヤの終着駅が1本も食い違わないか。前の日のダイヤを使っていると食い違う。
         比べられる列車（行先があり、ダイヤもある走行中の列車）がいなければ None。
         """
-        checked = False
-        for train in self.active_trains.values():
-            if train.active_destination is None or not train.has_dia:
-                continue
-            final = next(stop.station for stop in train.route_stations if stop.is_final)
-            if final != train.active_destination:
-                return False
-            checked = True
-        return True if checked else None
+        return self.state._dia_matches_positions()
 
     async def regist_dia(self, download:bool):
         "【非推奨】ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
@@ -1244,13 +1009,13 @@ class KHTracker:
     async def _regist_dia(self, download:bool):
         starttime_list = self.starttime_list
         if download or starttime_list is None:
-            url = "https://www.keihan.co.jp/zaisen-up/startTimeList.json"
+            url = START_TIME_LIST_URL
             try:
                 if starttime_list is None:
-                    starttime_list = _parse(startTimeList, await self._get(url), url)
+                    starttime_list = parse_timetable(await self._get(url), url)
                 # 変わっていなければ本体を受け取らず、手元のダイヤをそのまま使う
                 elif (text := await self._get_if_modified(url)) is not None:
-                    starttime_list = _parse(startTimeList, text, url)
+                    starttime_list = parse_timetable(text, url)
             except KeihanAPIError:
                 # 壊れた本文のETagで304が返り続けないよう忘れ、次の取得で取り直す
                 self._etags.pop(url, None)
@@ -1261,84 +1026,7 @@ class KHTracker:
             self.starttime_list = starttime_list
 
         # startTimeListからデータを登録
-        for train in starttime_list.TrainInfo:
-            # 臨時列車の場合
-            if train.extTrain:
-                # ActiveTrainDataがある場合、当日の便で確定するので登録
-                if train.wdfBlockNo in self.trains.keys():
-                    pass
-                # 当日の便でない可能性があるため登録スキップ
-                else:
-                    continue
-            
-            wdf = train.wdfBlockNo
-            if not wdf in self.trains:
-                self.trains[wdf] = TrainData(
-                    master=self,
-                    wdf=wdf,
-                    has_premiumcar=bool(train.premiumCar),
-                    train_formation=int(train.trainCar),
-                    date=self.date
-                )
-            
-            self.trains[wdf].train_formation = int(train.trainCar)
-            self.trains[wdf].has_premiumcar = bool(train.premiumCar)
-                
-            # ダイヤ登録
-            self.trains[wdf].route_stations = []
-            for stop_station in (train.diaStationInfoObjects):
-                # 3桁の上２桁が駅番号。ほかの形は見たことがないので、仕様の変更に気付けるよう警告する
-                if len(stop_station.stationNumber) != 3:
-                    warnings.warn(f"[WDF{wdf}] 駅番号の形式を読めないため、この駅を飛ばしました: {stop_station.stationNumber!r}")
-                    continue
-                station = self.stations.get(int(stop_station.stationNumber[0:2]))
-
-                # 未登録の駅ならスキップ（寝屋川信号場など）
-                if station == None:
-                    continue
-
-                # もし出発駅なら-
-                if stop_station.stationDepTime == "-":
-                    self.trains[wdf].route_stations.append(
-                        StopStationData(
-                            is_start = True,
-                            is_final=False,
-                            is_stop = True,
-                            station = station,
-                            time = None
-                            )
-                        )
-                    continue
-
-                # 3桁目が0なら通過、1・2なら停車
-                # 99:99 は通過のほか、停車するが時刻不明の場合もある（ダイヤ乱れ時の運転整理など）
-                is_stop:bool = stop_station.stationNumber[2] != "0"
-                ltime = tuple(map(int,stop_station.stationDepTime.split(":"))) #22:30 -> (22,30)
-                if ltime == (99,99):
-                    time = None
-                else:
-                    time = datetime.datetime.combine(self.date, datetime.time.min) + datetime.timedelta(hours=ltime[0],minutes=ltime[1])
-                    time = time.replace(tzinfo=JST)
-                self.trains[wdf].route_stations.append(
-                        StopStationData(
-                            is_start = False,
-                            is_stop = is_stop,
-                            is_final = False,
-                            station = station,
-                            time = time
-                            )
-                        )
-            
-            # まれに始発駅に時刻が登録される場合あり
-            # https://web.archive.org/web/20260124090959/https://www.keihan.co.jp/zaisen-up/startTimeList.json?6f4653a2-5a0a-4a65-810d-f1917026b14b
-            if len([stop for stop in self.trains[wdf].route_stations if stop.is_start]) == 0:
-                start_station = min(self.trains[wdf].route_stations, key=lambda x:x.time or datetime.datetime.max.replace(tzinfo=JST))
-                start_station.is_start = True
-
-            # 終着駅（ダイヤの並び順は走行順。時刻不明の停車駅もあるため、時刻ではなく並び順で最後の停車駅とする）
-            final_station = [stop for stop in self.trains[wdf].route_stations if stop.is_stop][-1]
-            final_station.is_final = True
-
+        self.state.apply_timetable(starttime_list)
         return self
 
     async def fetch_filelist(self):
@@ -1370,17 +1058,9 @@ class KHTracker:
     @property
     def max_delay_train(self) -> Optional[ActiveTrainData]:
         """現在もっとも遅延している運行中の列車"""
-        most_delay_train = max(
-            self.active_trains.values(), 
-            key=lambda x:x.delay_minutes if isinstance(x, ActiveTrainData) else 0,
-            default=None
-            )
-        if most_delay_train:
-            if most_delay_train.delay_minutes == 0:
-                return None
-        return most_delay_train
+        return self.state.max_delay_train
 
     @property
     def max_delay_minutes(self) -> int:
         """現在の最大遅延分数"""
-        return self.max_delay_train.delay_minutes if self.max_delay_train else 0
+        return self.state.max_delay_minutes
