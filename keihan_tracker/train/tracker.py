@@ -25,7 +25,7 @@ from .parse import (KeihanAPIError, _parse, _parse_delay_minutes,
 from .client import KHClient, USER_AGENT, write_snapshot
 from .state import KHState, JST, DATE_CHANGE_TIME
 from enum import Enum
-from typing import Optional, Literal, Mapping, AsyncIterator, Iterator, overload
+from typing import Optional, Literal, Mapping, AsyncIterator, Iterator, TYPE_CHECKING, overload
 from httpx import AsyncClient, HTTPError
 from pathlib import Path
 import dataclasses
@@ -35,6 +35,9 @@ import unicodedata
 import asyncio
 import logging
 import time
+
+if TYPE_CHECKING:
+    from .eta import EtaPolicy, EtaResult
 
 # 日付が変わったあと、ダイヤが今日のものだと確かめられなくても、取得のたびの取り直しをやめる時刻（安全装置）
 DIA_RETRY_DEADLINE = datetime.time(5, 30)
@@ -971,6 +974,11 @@ class KHTracker:
         """駅番号・KH番号・日本語名・英語名から駅を探す。"""
         return self.state.station(key)
 
+    def eta(self, train: TrainData, station: StationData, policy: Optional["EtaPolicy"] = None) -> "EtaResult":
+        """現在時刻（JST）で停車駅の時刻を推定する。"""
+        from .eta import EtaPolicy, estimate_arrival
+        return estimate_arrival(train, station, now=datetime.datetime.now(JST), policy=policy if policy is not None else EtaPolicy())
+
     async def watch(
             self, interval: float = 60, *, on_error: Literal["raise", "continue"] = "raise",
             ) -> AsyncIterator[FetchResult]:
@@ -1237,6 +1245,9 @@ class KHTrackerSync:
 
     def station(self, key: int | str) -> StationData:
         return self.state.station(key)
+
+    def eta(self, train: TrainData, station: StationData, policy: Optional["EtaPolicy"] = None) -> "EtaResult":
+        return self.tracker.eta(train, station, policy)
 
     def delay_growing_trains(
             self,
