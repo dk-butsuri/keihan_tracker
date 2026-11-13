@@ -175,6 +175,15 @@ class EtaResult:
 | 表示する条件 | D ≥ 1 のとき、(H ≤ 60 かつ D ≤ 10) または (H ≤ 25 かつ D ≤ 60) |
 | 伏せる列車 | 遅れが増え続けている／遅れが120分以上／同じ位置に15分超（始発駅の発車待ちは除く）／同じ方向で当駅との間に遅れ増加中か15分超停滞の列車がいる |
 
+### 9. 比較
+
+- **列車の `==` / `hash`**：`(date, wdf)` で比べる。WDF番号は1日の中でしか列車を区別しないため、日付も含める。`ActiveTrainData` と、それを `inactivate()` した `TrainData` は等しい（同じ列車）。`set` や辞書のキーに使える。
+- **種別の順位**：`TrainType` だけに持たせる（列車同士の `<` は作らない。`==` を `(date, wdf)` で比べるのと食い違うため）。`train.train_type > other.train_type`、`train.train_type >= TrainType.EXPRESS` のように使う。
+  - 今の `TrainType` は `str` の `Enum` のため、`<` が文字列の順で比べてしまう。これを順位での比較に置き換える。`==` は今のまま（`"特急"` とも等しい）。
+  - 順位（低い順）：普通 < 区間急行 < 準急 < 通勤準急 < 急行 < 通勤急行 < 深夜急行 < 快速急行 < 通勤快急 < 特急 < ライナー < 快速特急 洛楽（`schemes.py` の定義順）
+  - 「臨時列車」（公式が種別を出さないとき）は順位が分からないため、NaN と同じ扱いにする。`<`・`<=`・`>`・`>=` は相手が何でも False を返す。表示では「上位とも下位とも言えない」のでラベルが出ないだけで済む。ただし `sorted()` に混ぜると並びが崩れることを docstring に書く。
+  - 想定する使い方：`fastest_arrivals` で先着する列車が先発と違うとき、「先発の普通、後続の特急が先着」のようなラベルを付ける。
+
 ## 進める順番
 
 1. **v2.9**：同値性テストと非推奨警告
@@ -187,6 +196,6 @@ class EtaResult:
 2. `parse` / `KHClient` / `KHState` に分割する（挙動は変えない）
    - 状況（2026-11-13）：済み。`parse.py`・`client.py`・`state.py` を作り、`KHTracker` は今の属性を property で `state` / `client` に委譲する。`master` は `KHState` になった（上の「3. 位置まわりの名前」の後の注意を参照）。ダイヤは位置情報の後に渡す（臨時列車は走行中のものだけ登録するため）。`KHState()` は営業日を持たずに始まり、`apply_positions` で決まる。モジュール名（`schemes`→`schemas` など）は変えていない
 3. dataclass 化、ダイヤの差分更新、索引
-4. 位置まわりの改名、`position`、`status`、`find_trains` の `@overload`
+4. 位置まわりの改名、`position`、`status`、`find_trains` の `@overload`、比較（「9. 比較」）
 5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）
 6. README・RELIABILITY の更新、`MIGRATION.md`、3.0.0 リリース
