@@ -69,10 +69,9 @@ def test_train_type_extra_train_is_nan(op):
     assert EXTRA == EXTRA
 
 
-def test_train_type_extra_train_breaks_sorted():
-    """臨時列車は NaN と同じ扱いなので、sorted() に混ぜると並びが崩れる（docstring に書いてある注意）"""
-    types = [TrainType.LTD_EXP, TrainType.LOCAL, EXTRA, TrainType.EXPRESS, TrainType.RAPID_EXP, TrainType.SEMI_EXP]
-    assert sorted(types) != sorted(t for t in types if t is not EXTRA) + [EXTRA]
+def test_train_type_extra_train_sorted_warning():
+    """臨時列車は NaN と同じ扱いなので、sorted() に混ぜたときの並びは保証しない（docstring に書いてある注意）。
+    実際に崩れるかはソートの実装しだいで、Python 3.12 以前ではたまたま並ぶことがあるため、並びそのものは確かめない"""
     assert "臨時列車は NaN と同じ扱い" in TrainType.__lt__.__doc__
     assert "sorted()" in TrainType.__lt__.__doc__
 
