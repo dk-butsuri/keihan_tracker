@@ -1,8 +1,9 @@
 """
 KHState を、通信もモックも使わずに動かすテスト。
-fixture の JSON を parse 関数で読み、apply_stations → apply_timetable → apply_positions の順に渡す。
+fixture の JSON を parse 関数で読み、apply_stations → apply_positions → apply_timetable の順に渡す。
 """
 
+import pytest
 from conftest import load_fixture_bytes
 from keihan_tracker import (KHState, KHTracker, ActiveTrainData,
                             parse_select_station, parse_transfer_guide, parse_timetable, parse_positions)
@@ -56,6 +57,17 @@ def test_state_matches_tracker(tracker: KHTracker):
             assert train.current_or_next_stop == other.current_or_next_stop
     assert state.max_delay_minutes == tracker.max_delay_minutes
     assert state._dia_matches_positions() == tracker._dia_matches_positions()
+
+
+def test_timetable_needs_date():
+    """営業日が決まる前にダイヤを渡すと、分かるエラーにする"""
+    state = KHState()
+    state.apply_stations(
+        parse_select_station(_text("select_station.json")),
+        parse_transfer_guide(_text("transferGuideInfo.json")),
+    )
+    with pytest.raises(ValueError, match="apply_positions"):
+        state.apply_timetable(parse_timetable(_text("startTimeList.json")))
 
 
 def test_state_uses_no_clock():

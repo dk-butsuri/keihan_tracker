@@ -94,7 +94,9 @@ v3.0 で行う構造改定の計画です。2026-11-13 時点で決めたこと�
 | `is_stopping` | `stopped_at is not None` または `status` |
 | `is_at_station` | `position.station is not None` |
 
-旧名は v3 で消えるため、古いコードは `AttributeError` で気づけます。同じ名前のまま意味が変わる箇所はありません。
+旧名は v3 で消えるため、古いコードは `AttributeError` で気づけます。同じ名前のまま意味が変わるのは、次の `master` だけです。
+
+- **`master`**：`StationData` / `TrainData` / `TrainHistoryRecord` の `master` は、`KHTracker` から `KHState` に変わります（step 2 で変更）。状態（`stations`・`trains` など）は今までどおり読めますが、`fetch_pos()`・`web`・`snapshot_dir` など取得側のものは `master` から使えなくなります。取得は `KHTracker` 側で行ってください。`MIGRATION.md` にも書きます。
 
 ### 4. レイヤー分割
 
@@ -103,7 +105,7 @@ schemas.py   公式JSONのpydanticモデル（今の schemes）
 parse.py     parse_positions(text) など。通信なし。壊れていれば KeihanAPIError
 client.py    KHClient / KHClientSync。User-Agent・ETag・レート制限・snapshot保存
 state.py     KHState。通信も時計も持たない状態管理
-               .apply_stations() / .apply_timetable() / .apply_positions()
+               .apply_stations() / .apply_positions() / .apply_timetable()（この順に呼ぶ）
 tracker.py   KHTracker / KHTrackerSync = KHClient + KHState
 ```
 
@@ -183,6 +185,7 @@ class EtaResult:
    - バス遅延の調査（2026-11-13 20:43、同志社香里・京阪香里園・枚方市駅北口の計7のりば・39便）：遅れた便はなく、遅れの表記は未確認。受信中の便は HTML の見出しに「定刻： 21:09 (定時運行中)」、`busstateprms` の時刻欄に「21:09 到着予定」が入る。到着済は「(到着済)」、未受信の便は括弧なしで時刻欄が「定刻 21:45」。遅れたときは括弧内か「到着予定」の時刻が変わると考えられるが、遅れた便の応答を保存してから形を決める。Wayback Machine には `busstateupd` の保存が無く、`linediagram` の42件も定刻表だけ（推定時刻なし）だった。このため `get_khbus_info` / `fetch_diagram` に `snapshot_dir` を足し、`KHTracker` と同じ形式で応答を保存できるようにした。その後、遅れた便の HTML が手に入ったため（見出しが「定刻： 21:11 (約1分遅れ)」、時刻欄が「21:12 到着予定」、`more_min` に `delay` クラス）、`BusState` に `scheduled_time`・`delay_text`・`delay_minutes` を足した。取得は `_fetch_busstate`、パースと加工は `parse_busstate`（通信なし）に分けた
    - `StationData.fastest_arrivals`（この駅から乗れる列車で、この先の各駅に最も早く着く列車と到着時刻。乗り換えなし・予定時刻）を足す。遅れは足さない（待ち合わせる列車は、相手が遅れても待つため順番が変わらない）。乗り換えも考えない。v3 で駅→列車の索引を作ったら、それを使って速くする
 2. `parse` / `KHClient` / `KHState` に分割する（挙動は変えない）
+   - 状況（2026-11-13）：済み。`parse.py`・`client.py`・`state.py` を作り、`KHTracker` は今の属性を property で `state` / `client` に委譲する。`master` は `KHState` になった（上の「3. 位置まわりの名前」の後の注意を参照）。ダイヤは位置情報の後に渡す（臨時列車は走行中のものだけ登録するため）。`KHState()` は営業日を持たずに始まり、`apply_positions` で決まる。モジュール名（`schemes`→`schemas` など）は変えていない
 3. dataclass 化、ダイヤの差分更新、索引
 4. 位置まわりの改名、`position`、`status`、`find_trains` の `@overload`
 5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）

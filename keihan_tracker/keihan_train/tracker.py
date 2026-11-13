@@ -913,7 +913,21 @@ class KHTracker:
             line:           Optional[LineLiteral] = None,
             current_or_next_stop: Optional[StationData] = None,
             ) -> Sequence[TrainData]:
-        """条件に合致する列車を検索してリストで返します。引数は KHState.find_trains を参照。"""
+        """
+        条件に合致する列車を検索してリストで返します。
+        - active: 走行中か
+        - type: 列車種別（例: "普通"）
+        - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）。予定の列車は始発・終着から推定した方向
+        - is_special: 臨時列車かどうか
+        - train_number: 列車番号（例: "2201"）
+        - has_premiumcar: プレミアムカー付きかどうか
+        - destination: 行き先駅
+        - current_or_next_stop: 停車中の駅 or 次の停車駅
+        - next_stop_station: 【非推奨】current_or_next_stop と同じ
+        - line: 路線。走行中の列車は今いる路線、走行中でない列車は TrainData.line（走ったことがあればそのときの路線、なければ停車駅から推定した路線）
+        is_special・train_number・current_or_next_stop・is_stopping は走行中の列車だけが持つ値のため、
+        指定すると走行中でない列車は当てはまりません。
+        """
         # 警告の発生元が呼び出し側になるよう、ここで警告してから渡す
         if next_stop_station is not None:
             _deprecated("find_trains の next_stop_station", "同じ意味の current_or_next_stop を使ってください。")

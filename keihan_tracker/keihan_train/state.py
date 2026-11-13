@@ -1,6 +1,7 @@
 """
 列車・駅の状態を管理する。通信も時計も持たない。
-パース済みのモデルを apply_stations → apply_timetable → apply_positions の順に渡して更新する。
+パース済みのモデルを apply_stations → apply_positions → apply_timetable の順に渡して更新する。
+（臨時列車は走行中のものだけダイヤに登録するため、ダイヤは位置情報の後に渡す）
 営業日は、位置情報の fileCreatedTime だけから決める。
 """
 
@@ -39,7 +40,7 @@ class KHState:
     京阪電車の列車・駅の状態。
     - stations: 全駅の辞書（駅番号:StationData）
     - trains: 全列車の辞書（WDF番号:TrainData）
-    - apply_stations, apply_timetable, apply_positions にパース済みのデータを渡して更新する
+    - apply_stations, apply_positions, apply_timetable にパース済みのデータを渡して更新する
     """
     def __init__(self, date: Optional[datetime.date] = None) -> None:
         #パースしたJSONデータ（BaseModel）
@@ -230,8 +231,13 @@ class KHState:
         return True if checked else None
 
     def apply_timetable(self, starttime_list: startTimeList) -> None:
-        """ダイヤを反映する。ダイヤの日付は self.date（apply_positions で決まる営業日）とする。"""
+        """
+        ダイヤを反映する。ダイヤの日付は self.date（apply_positions で決まる営業日）とする。
+        臨時列車は走行中のものだけ登録するため、apply_positions の後に呼ぶ。
+        """
         from .tracker import TrainData, StopStationData
+        if self.date is None:
+            raise ValueError("営業日が決まっていません。先に apply_positions を呼ぶか、KHState(date) で渡してください。")
         self.starttime_list = starttime_list
 
         # startTimeListからデータを登録
