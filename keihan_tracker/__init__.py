@@ -1,4 +1,4 @@
-from .train import KHTracker
+from .train import KHTracker, KHTrackerSync, FetchResult
 from .train.tracker import TrainData, ActiveTrainData, TrainHistoryRecord, TrainPosition, TrainStatus, LineLiteral, StationData, StopStationData, DiaNotFoundError, KeihanAPIError
 from .train.schemas import TrainType
 from .train.state import KHState

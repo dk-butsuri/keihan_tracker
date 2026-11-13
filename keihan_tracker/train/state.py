@@ -76,6 +76,26 @@ class KHState:
         """全駅（駅番号:StationData）。読み取り専用（書き換えると TypeError）"""
         return MappingProxyType(self._stations)
 
+    def station(self, key: int | str) -> StationData:
+        """駅番号・KH番号・日本語名・英語名から駅を探す。無ければ KeyError、同名が複数なら ValueError。"""
+        if isinstance(key, int):
+            number = key
+        else:
+            name = key.strip().casefold()
+            digits = name[2:] if name.startswith("kh") else name
+            number = int(digits) if digits.isdecimal() else None
+            if number is None:
+                matches = [station for station in self.stations.values()
+                           if name in (station.station_name.ja.strip().casefold(),
+                                       station.station_name.en.strip().casefold())]
+                if len(matches) > 1:
+                    raise ValueError(f"駅名が重複しています: {key!r}")
+                if matches:
+                    return matches[0]
+        if number in self.stations:
+            return self.stations[number]
+        raise KeyError(key)
+
     @property
     def position_created_at(self) -> Optional[datetime.datetime]:
         """手元の位置情報の作成時刻（fileCreatedTime）。取得に失敗しても変わらないので、データの古さの判断に使う"""

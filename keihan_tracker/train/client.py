@@ -52,6 +52,10 @@ class KHClient:
         self._last_snapshot: dict[str, bytes] = {}                       # ファイル名:前回保存した内容
         self._etags: dict[str, str] = {}                                 # URL:前回受け取ったETag
 
+    async def aclose(self) -> None:
+        """通信に使っているクライアントを閉じる。"""
+        await self.web.aclose()
+
     async def _get(self, url: str) -> str:
         """URLを取得して本文を返す。snapshot_dirが指定されていれば保存もする。"""
         res = await self._request(url, {})

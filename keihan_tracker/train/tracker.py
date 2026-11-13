@@ -25,18 +25,35 @@ from .parse import (KeihanAPIError, _parse, _parse_delay_minutes,
 from .client import KHClient, USER_AGENT, write_snapshot
 from .state import KHState, JST, DATE_CHANGE_TIME
 from enum import Enum
-from typing import Optional, Literal, overload
-from httpx import AsyncClient
+from typing import Optional, Literal, Mapping, AsyncIterator, Iterator, overload
+from httpx import AsyncClient, HTTPError
 from pathlib import Path
 import dataclasses
 import functools
 import datetime
 import unicodedata
+import asyncio
+import logging
+import time
 
 # 日付が変わったあと、ダイヤが今日のものだと確かめられなくても、取得のたびの取り直しをやめる時刻（安全装置）
 DIA_RETRY_DEADLINE = datetime.time(5, 30)
 # fetch_pos の間隔の下限（秒）。公式の位置情報は1分ごとにしか更新されないため、これより短くしても新しい情報は増えない
 MIN_RATE_LIMIT = 15
+
+
+class FetchResult(str, Enum):
+    """位置情報の取得結果。例外が出たときは返さない。"""
+    SKIPPED = "skipped"
+    UNCHANGED = "unchanged"
+    UPDATED = "updated"
+
+
+def _validate_watch(interval: float, rate_limit: float, on_error: str) -> None:
+    if interval < rate_limit:
+        raise ValueError(f"interval は rate_limit_interval（{rate_limit} 秒）以上にしてください")
+    if on_error not in ("raise", "continue"):
+        raise ValueError('on_error は "raise" または "continue" にしてください')
 
 
 class DiaNotFoundError(ValueError):
@@ -940,6 +957,39 @@ class KHTracker:
         self.last_regist_dia_date: Optional[datetime.date] = None
         self.rate_limit_interval:float = rate_limit                      # アクセス間隔
 
+    async def aclose(self) -> None:
+        """通信に使っているクライアントを閉じる。"""
+        await self.client.aclose()
+
+    async def __aenter__(self) -> "KHTracker":
+        return self
+
+    async def __aexit__(self, exc_type, exc_value, traceback) -> None:
+        await self.aclose()
+
+    def station(self, key: int | str) -> StationData:
+        """駅番号・KH番号・日本語名・英語名から駅を探す。"""
+        return self.state.station(key)
+
+    async def watch(
+            self, interval: float = 60, *, on_error: Literal["raise", "continue"] = "raise",
+            ) -> AsyncIterator[FetchResult]:
+        """
+        位置情報を繰り返し取得する。使う側で break して止める。
+        取得開始から interval 秒ごとに呼ぶ。通信・読み込みの失敗は on_error="continue" なら警告して次へ進む。
+        引数は反復の開始時に検証する。
+        """
+        _validate_watch(interval, self.rate_limit_interval, on_error)
+        while True:
+            started = time.monotonic()
+            try:
+                yield await self.fetch_pos()
+            except (HTTPError, KeihanAPIError):
+                if on_error == "raise":
+                    raise
+                logging.getLogger("keihan_tracker").warning("位置情報の取得に失敗しました", exc_info=True)
+            await asyncio.sleep(max(0, interval - (time.monotonic() - started)))
+
     # KHState の属性。代入もできる
     transfer_guide_info = _state_property("transfer_guide_info")  # 駅ごとの乗り入れデータ
     select_station = _state_property("select_station")           # 路線ごとの駅名データ
@@ -1057,7 +1107,7 @@ class KHTracker:
         return await self.client._get_if_modified(url)
 
     #動的データを更新
-    async def fetch_pos(self):
+    async def fetch_pos(self) -> FetchResult:
         "列車走行位置を更新します。1分に1回が適切でしょう。"
         #不変データをダウンロード
         if not self.select_station:
@@ -1073,12 +1123,13 @@ class KHTracker:
             # 前回の取得 + 制限interval
             next_fetch = self.last_fetch_pos_datetime + datetime.timedelta(seconds=self.rate_limit_interval)
             if now <= next_fetch:
-                return
+                return FetchResult.SKIPPED
 
         # 列車位置を取得
         self.last_fetch_pos_datetime = now
         # 壊れていれば、列車の状態を変える前に KeihanAPIError で止まる
         url = TRAIN_POSITION_URL
+        previous_created_at = self.position_created_at
         self.state.apply_positions(parse_positions(await self._get(url), url))
         assert self.train_position_list is not None
 
@@ -1103,6 +1154,7 @@ class KHTracker:
             await self._regist_dia(True)
         if self.dia_confirmed_date != self.date and self._dia_matches_positions():
             self.dia_confirmed_date = self.date
+        return FetchResult.UNCHANGED if self.position_created_at == previous_created_at else FetchResult.UPDATED
 
     def _dia_matches_positions(self) -> Optional[bool]:
         """
@@ -1143,3 +1195,169 @@ class KHTracker:
     def max_delay_minutes(self) -> int:
         """現在の最大遅延分数"""
         return self.state.max_delay_minutes
+
+
+class KHTrackerSync:
+    """
+    KHTracker を await なしで使う同期版。専用のイベントループを使い続ける。
+    with KHTrackerSync() as tracker: で使うか、使い終えたら close() する。
+    async def や Jupyter の中では KHTracker を await で使う。
+    """
+    def __init__(self, rate_limit: float = 30, snapshot_dir: Optional[str | Path] = None) -> None:
+        self.tracker = KHTracker(rate_limit, snapshot_dir)
+        self._loop = asyncio.new_event_loop()
+
+    @property
+    def state(self) -> KHState:
+        return self.tracker.state
+
+    @property
+    def client(self) -> KHClient:
+        return self.tracker.client
+
+    @property
+    def trains(self) -> Mapping[int, TrainData | ActiveTrainData]:
+        return self.state.trains
+
+    @property
+    def stations(self) -> Mapping[int, StationData]:
+        return self.state.stations
+
+    @property
+    def active_trains(self) -> dict[int, ActiveTrainData]:
+        return self.state.active_trains
+
+    @property
+    def date(self) -> Optional[datetime.date]:
+        return self.state.date
+
+    @property
+    def position_created_at(self) -> Optional[datetime.datetime]:
+        return self.state.position_created_at
+
+    def station(self, key: int | str) -> StationData:
+        return self.state.station(key)
+
+    def delay_growing_trains(
+            self,
+            line: Optional[LineLiteral] = None,
+            window: datetime.timedelta = datetime.timedelta(minutes=5),
+            ratio: float = 0.9,
+            ) -> list[ActiveTrainData]:
+        return self.state.delay_growing_trains(line, window, ratio)
+
+    def _check_loop(self) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("動いているイベントループの中では KHTracker を await で使ってください")
+        if self._loop.is_closed():
+            raise RuntimeError("KHTrackerSync はすでに閉じています")
+
+    def fetch_pos(self) -> FetchResult:
+        """列車走行位置を同期的に更新する。"""
+        self._check_loop()
+        return self._loop.run_until_complete(self.tracker.fetch_pos())
+
+    def close(self) -> None:
+        """通信クライアントと専用のイベントループを閉じる。繰り返し呼んでもよい。"""
+        if self._loop.is_closed():
+            return
+        self._check_loop()
+        try:
+            self._loop.run_until_complete(self.tracker.aclose())
+        finally:
+            self._loop.close()
+
+    def __enter__(self) -> "KHTrackerSync":
+        self._check_loop()
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def watch(
+            self, interval: float = 60, *, on_error: Literal["raise", "continue"] = "raise",
+            ) -> Iterator[FetchResult]:
+        """位置情報を繰り返し取得する。取得開始から interval 秒ごとに呼び、time.sleep で待つ。"""
+        _validate_watch(interval, self.tracker.rate_limit_interval, on_error)
+        while True:
+            started = time.monotonic()
+            try:
+                yield self.fetch_pos()
+            except (HTTPError, KeihanAPIError):
+                if on_error == "raise":
+                    raise
+                logging.getLogger("keihan_tracker").warning("位置情報の取得に失敗しました", exc_info=True)
+            time.sleep(max(0, interval - (time.monotonic() - started)))
+
+    @overload
+    def find_trains(
+            self,
+            active:         Literal[True],
+            train_type:     Optional[TrainType] = None,
+            direction:      Optional[Literal["up","down"]] = None,
+            is_special:     Optional[bool] = None,
+            train_number:   Optional[str] = None,
+            has_premiumcar: Optional[bool] = None,
+            destination:    Optional[StationData] = None,
+            min_delay:      Optional[int] = None,
+            max_delay:      Optional[int] = None,
+            status:         Optional[TrainStatus] = None,
+            line:           Optional[LineLiteral] = None,
+            current_or_next_stop: Optional[StationData] = None,
+            ) -> list[ActiveTrainData]: ...
+    @overload
+    def find_trains(
+            self,
+            active:         Optional[bool] = None,
+            train_type:     Optional[TrainType] = None,
+            direction:      Optional[Literal["up","down"]] = None,
+            is_special:     Optional[bool] = None,
+            train_number:   Optional[str] = None,
+            has_premiumcar: Optional[bool] = None,
+            destination:    Optional[StationData] = None,
+            min_delay:      Optional[int] = None,
+            max_delay:      Optional[int] = None,
+            status:         Optional[TrainStatus] = None,
+            line:           Optional[LineLiteral] = None,
+            current_or_next_stop: Optional[StationData] = None,
+            ) -> list[TrainData]: ...
+    def find_trains(
+            self,
+            active:         Optional[bool] = None,
+            train_type:     Optional[TrainType] = None,
+            direction:      Optional[Literal["up","down"]] = None,
+            is_special:     Optional[bool] = None,
+            train_number:   Optional[str] = None,
+            has_premiumcar: Optional[bool] = None,
+            destination:    Optional[StationData] = None,
+            min_delay:      Optional[int] = None,
+            max_delay:      Optional[int] = None,
+            status:         Optional[TrainStatus] = None,
+            line:           Optional[LineLiteral] = None,
+            current_or_next_stop: Optional[StationData] = None,
+            ) -> list[TrainData]:
+        """
+        条件に合致する列車を検索してリストで返します。
+        - active: 走行中か。True を渡すと戻り値の型が list[ActiveTrainData] になる
+        - type: 列車種別（例: "普通"）
+        - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）。予定の列車は始発・終着から推定した方向
+        - is_special: 臨時列車かどうか
+        - train_number: 列車番号（例: "2201"）
+        - has_premiumcar: プレミアムカー付きかどうか
+        - destination: 行き先駅
+        - status: 停車中・通過中・駅間・不明（TrainStatus）
+        - current_or_next_stop: 停車中の駅 or 次の停車駅
+        - line: 路線。走行中の列車は今いる路線、走行中でない列車は TrainData.line（走ったことがあればそのときの路線、なければ停車駅から推定した路線）
+        is_special・train_number・current_or_next_stop・status は走行中の列車だけが持つ値のため、
+        指定すると走行中でない列車は当てはまりません。
+        """
+        return self.state.find_trains(
+            active=active, train_type=train_type, direction=direction, is_special=is_special,
+            train_number=train_number, has_premiumcar=has_premiumcar, destination=destination,
+            min_delay=min_delay, max_delay=max_delay, status=status, line=line,
+            current_or_next_stop=current_or_next_stop,
+        )
