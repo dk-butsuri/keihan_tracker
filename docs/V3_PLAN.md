@@ -104,7 +104,7 @@ v3.0 で行う構造改定の計画です。2026-11-13 時点で決めたこと�
 ```
 schemas.py   公式JSONのpydanticモデル（今の schemes）
 parse.py     parse_positions(text) など。通信なし。壊れていれば KeihanAPIError
-client.py    KHClient / KHClientSync。User-Agent・ETag・レート制限・snapshot保存
+client.py    KHClient。User-Agent・ETag・snapshot保存
 state.py     KHState。通信も時計も持たない状態管理
                .apply_stations() / .apply_positions() / .apply_timetable()（この順に呼ぶ）
 tracker.py   KHTracker / KHTrackerSync = KHClient + KHState
@@ -114,7 +114,7 @@ tracker.py   KHTracker / KHTrackerSync = KHClient + KHState
 |:---|:---|
 | パースだけしたい | `parse.py` と `schemas.py` |
 | 取得を自前でやりたい | `KHState()` を作り、`apply_*` に流し込む |
-| 取得だけ使いたい | `KHClient` / `KHClientSync` |
+| 取得だけ使いたい | `KHClient` |
 | 全部任せたい | `KHTracker` / `KHTrackerSync` |
 
 - `KHState` は営業日を位置情報の `fileCreatedTime` だけから決めます。実時刻を見ないため、テストで `tracker.date` を書き換える必要がなくなり、保存したスナップショットの解析（`tools/`）も通信のモックなしで行えます。
@@ -202,6 +202,79 @@ class EtaResult:
 - **始発駅の時刻**：公式のデータが `"-"` のため、始発駅の `time` はいつも None。始発駅からの所要時間が取れない。埋める方法（次の駅の時刻から逆算するなど）を調べる。
 - 経路の中の番号（`index`）は持たせない。差分更新で経路を作り直すと合わせ直しが要るため、次の停車駅は列車側（`next_stop` など）で出す。
 
+### 11. step 5・6 の仕様
+
+step 5 は次の順に、1項目ずつ別のコミット（またはPR）にする。どの項目でも、同値性テストの期待値（`tests/fixtures/equivalence/`）は変えない。
+
+#### 5a. モジュール名の変更と tabulate の削除
+
+- `keihan_tracker/keihan_train/` → `keihan_tracker/train/`、`keihan_train/schemes.py` → `train/schemas.py`、`bus/schemes.py` → `bus/schemas.py`、`bus/parsing.py` → `bus/parse.py`。`git mv` で動かす。
+- 旧名で import できるようにはしない（v3 は互換を切る版のため）。旧名は `MIGRATION.md` に書く。`keihan_tracker` 直下からの import（`from keihan_tracker import KHTracker` など）は今のまま使える。
+- `tabulate` をやめる。`TrainData.__str__`・`StationData.__str__` の表は、自前の簡単な整形（列幅をそろえた固定幅の表）にする。出力の形は多少変わってよい。`setup.py` の依存からも消す。
+- テストの import とドキュメントの中のモジュール名も直す。
+
+#### 5b. 取得まわり（`aclose`・`async with`・`FetchResult`・`watch`・`KHTrackerSync`・`station()`）
+
+- **閉じる**：`KHClient.aclose()` と `KHTracker.aclose()` を足す（`self.web.aclose()` を呼ぶ）。`KHTracker` は `async with KHTracker() as tracker:` で使え、抜けると `aclose()` する。`__aenter__` は自分を返す。
+- **`fetch_pos()` の戻り値**：`FetchResult`（`str` の `Enum`、`keihan_tracker` 直下から import できる）を返す。
+  - `SKIPPED`：レート制限で取得しなかった
+  - `UNCHANGED`：取得したが、位置情報の `fileCreatedTime` が前回と同じ
+  - `UPDATED`：それ以外（初回を含む）
+  - 状態の更新の仕方は今のまま変えない（`UNCHANGED` でも今と同じように `apply_*` を呼ぶ）。戻り値を足すだけ。通信の失敗・`KeihanAPIError` は今まで通り例外で出す。
+- **`watch`**：`async def watch(self, interval: float = 60, *, on_error: Literal["raise", "continue"] = "raise") -> AsyncIterator[FetchResult]`
+  - `fetch_pos()` を呼んで結果を yield し、前回の呼び出しの開始から `interval` 秒たつまで `asyncio.sleep` する、をくり返す（処理にかかった時間は差し引く）。
+  - `interval < rate_limit_interval` なら、呼んだときに `ValueError`（毎回 `SKIPPED` になるため）。
+  - `on_error="continue"` のときは、`httpx.HTTPError` と `KeihanAPIError` を `logging`（ロガー名 `keihan_tracker`）に warning で出して、その回は yield せずに次へ進む。それ以外の例外はいつも外に出す。
+  - 止めるのは使う側が `break` する。
+- **`KHTrackerSync`**：`await` なしで使える版。`KHTracker` を継承せず、中に持つ。
+  - `__init__(rate_limit=30, snapshot_dir=None)` で、自分専用のイベントループ（`asyncio.new_event_loop()`）と `KHTracker` を作る。`httpx.AsyncClient` はループに結びつくため、呼ぶたびに `asyncio.run` してはいけない。
+  - `fetch_pos() -> FetchResult`、`close()`（`aclose` してループも閉じる）、`with KHTrackerSync() as tracker:`、`watch(interval=60, *, on_error="raise") -> Iterator[FetchResult]`（`time.sleep` で待つ）。
+  - 動いているイベントループの中（`async def` の中や Jupyter）で `fetch_pos()` を呼んだら、`RuntimeError` に「`KHTracker` を `await` で使ってください」と書いて出す。
+  - 読むための属性は、`.tracker`（中の `KHTracker`）、`.state`、`.client` に加えて、よく使うもの（`trains`・`stations`・`active_trains`・`date`・`position_created_at`・`find_trains`・`delay_growing_trains`・`station`・`eta`）を明示的に委譲する。`__getattr__` での丸ごと委譲はしない（型チェッカーが追えないため）。
+  - `KHClientSync` は作らない（使い道が薄いため。上の表からも消した）。
+- **駅の検索**：`KHState.station(key: int | str) -> StationData` を足し、`KHTracker`・`KHTrackerSync` から委譲する。
+  - `int`（`18`）、`"KH18"`（大文字小文字は問わない。`"KH1"` と `"KH01"` の両方）、数字だけの文字列（`"18"`）、日本語の駅名（`"香里園"`）、英語の駅名（大文字小文字・前後の空白は問わない）を受ける。
+  - 駅番号はそのまま駅ナンバリングの数字（1〜42・51〜54・61〜67・71〜77）。駅名に重複はない（fixture で確認済み）が、重複したときは `ValueError` にする。
+  - 見つからなければ `KeyError`（メッセージに渡した値を入れる）。駅データがまだ無い（`fetch_pos()` 前）ときも `KeyError`。
+
+#### 5c. バスの層分け
+
+- `bus/client.py` に `BusClient(snapshot_dir=None)` を作る。`get_info(stop_name, stop_num=1) -> BusLocationResponse`、`fetch_diagram(dgmpl) -> BusDiagram`、`aclose()`、`async with`。
+  - `httpx.AsyncClient`・30秒のキャッシュ・`_last_snapshot` はインスタンスに持つ。
+  - スナップショットの保存形式とファイル名は今のまま。
+- パース（`parse_busstate`・`parse_diagram`・`build_diagram_dgmpl`・`parse_bus_delay`）は `bus/parse.py` に置く。通信しない。
+- 今の `get_khbus_info()` と `fetch_diagram()`（モジュールの関数）は残し、挙動も今のまま（呼ぶたびに `AsyncClient` を作って閉じる、30秒のキャッシュはモジュールで共有）にする。
+  - 中身は、モジュールに1つ置いた `BusClient` に「通信のたびに `AsyncClient` を作って閉じる」設定（内部の引数）を付けて呼ぶ形にする。
+  - 呼ぶたびに作り直すのは、`asyncio.run` を何度も呼ぶ使い方でループが変わるため。
+- `BusClient`・`parse_busstate`・`parse_diagram` を `keihan_tracker` 直下から import できるようにする。
+
+#### 5d. 到着予測
+
+- 「8. 到着予測」の通り。`keihan_tracker/train/eta.py` に `EtaPolicy`・`EtaHidden`（`Enum`）・`EtaResult`・`estimate_arrival` を置き、直下から import できるようにする。
+- `estimate_arrival(train, station, *, now, policy=EtaPolicy())`。
+  - ほかの列車（前が詰まっているか）は `train.master`（`KHState`）から見る。
+  - `now` は必須のキーワード引数（タイムゾーン付き）。
+  - 停車しない駅・ダイヤがない列車・もう通り過ぎた駅は `ValueError` ではなく、`time=None` と理由で返すか、signage の扱いに合わせる。どちらにしたかを docstring に書く。
+- `KHTracker.eta(train, station, policy=None)` は `now=datetime.now(JST)` を入れて呼ぶ。
+- **一致の確かめ方**
+  - signage のリポジトリ（https://github.com/dk-butsuri/keihan_signage 、公開）を、このリポジトリの外に clone して読む。
+  - signage の関数を直接呼べるなら、fixture（平日・土休日）の全走行列車 × 全停車駅で両方の出力を比べ、一致することをテストにする。signage を依存に足すのはだめなので、比べた結果（入力と期待値）をテスト用のデータとして保存する。
+  - signage にテストがあれば、その入力と期待値も移す。
+  - 一致しないところがあれば、直さずに一覧にして報告する。
+
+#### 6. 仕上げ
+
+- `setup.py` → `pyproject.toml`
+  - `license = "MIT"`（SPDX 形式）にして、License の classifier は外す。
+  - `requires-python = ">=3.10"`。
+  - バージョンは `3.0.0`。
+- README・RELIABILITY を新しい名前と使い方に直す。
+- `MIGRATION.md` を書く。v2.9 → v3 で消した名前・変えた名前・変わった挙動を、書き換え前と後のコード例つきで並べる。
+  - 変わった挙動：`trains` が読み取り専用、`master` が `KHState`、列車の `==`、`TrainType` の比較、モジュール名。
+  - 元ネタはこのファイルと `git log`。
+- 始発駅の時刻（「10. 停車駅」）は、調べた結果を報告するだけでよい（実装しない）。
+- タグ・GitHub Release・PyPI への公開はしない（Release を作ると PyPI に公開されるため、人がやる）。
+
 ## 進める順番
 
 1. **v2.9**：同値性テストと非推奨警告
@@ -220,5 +293,5 @@ class EtaResult:
    - 3b（差分更新・索引）で、停車駅の `train`・`get_stop` も入れる（「10. 停車駅」）。新しく走り出した列車は、今は毎回のダイヤ登録で停車駅を受け取っているため、差分更新ではその列車だけ登録し直す。営業日が変わったときは全部作り直す
 4. 位置まわりの改名、`position`、`status`、`find_trains` の `@overload`、比較（「9. 比較」）
    - 状況（2026-11-14）：済み。v2.9 で非推奨にした名前を全部消した（`wdfBlockNo=` の別名も）。`TrainStatus`（`STOPPED`・`PASSING`・`BETWEEN`・`UNKNOWN`）と `find_trains(status=)` を足した。同値性テストは期待値を変えずに通り、`status` が v2 の `is_stopping` と一致することも確かめた。`find_trains` の `@overload` は `active=True` のときだけ（走行中だけの条件の組み合わせは overload が増えすぎるため）。比較は「9. 比較」のとおり。`TrainType` は相手が `str` なら `TrainType` に直して比べる（`NotImplemented` を返すと文字コード順の比較にすり替わるため）
-5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）
-6. README・RELIABILITY の更新、`MIGRATION.md`、3.0.0 リリース
+5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）。中身は「11. step 5・6 の仕様」の 5a〜5d
+6. README・RELIABILITY の更新、`MIGRATION.md`、`pyproject.toml`、3.0.0 リリース。中身は「11. step 5・6 の仕様」の 6
