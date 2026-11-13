@@ -296,4 +296,5 @@ step 5 は次の順に、1項目ずつ別のコミット（またはPR）にす�
 5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）。中身は「11. step 5・6 の仕様」の 5a〜5d
    - 状況（2026-11-14）：済み（5a）。`git mv` で `train`・`schemas`・`bus/parse.py` に改名し、ライブラリ・テスト・確認用 GUI の import を更新した。旧モジュールの互換口は作らない。tabulate の依存を削除し、列車の表は日本語の文字幅を考慮した固定幅にした。仕様の StationData は現在は駅名だけを返すため維持し、実際に表を出している TrainData・ActiveTrainData を変更した。表の未使用のホーム番線列を省き、時刻の見出しを中身に合わせて発車時刻にした。
    - 状況（2026-11-14）：済み（5b）。`aclose`・`async with`・`FetchResult`・`watch`・専用ループを保持する `KHTrackerSync`・`station()` を追加した。UNCHANGED でも従来の apply 処理を行う。監視の引数は反復開始時に検証し、未知の on_error も ValueError にした。同期版の close は再呼び出し可能とし、閉じた後の取得や実行中のイベントループ内での利用は RuntimeError にした。駅名は日本語も前後の空白を除いて検索する。同期版の eta の委譲は、実体を作る 5d で追加する。
+   - 状況（2026-11-14）：済み（5c）。`BusClient` に通信・30秒キャッシュ・保存済み本文を移し、パースを `bus/parse.py` に集めた。既存のモジュール関数は内部の共通 BusClient を使い、通信ごとに AsyncClient を開閉する。スナップショットの形式・名前とエラー時の挙動は維持した。既存テストはキャッシュ等の内部状態を差し替える場所だけ新しい層へ移した。snapshot_dir は呼び出しごとに内部メソッドへ渡し、共通インスタンスの設定を書き換えない。
 6. README・RELIABILITY の更新、`MIGRATION.md`、`pyproject.toml`、3.0.0 リリース。中身は「11. step 5・6 の仕様」の 6

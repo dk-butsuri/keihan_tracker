@@ -6,7 +6,28 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Iterator, Optional, Union
 
-from .schemas import BusDiagram, BusDiagramStop
+from .schemas import BusDiagram, BusDiagramStop, BusLocationResponse
+from ..train.parse import KeihanAPIError
+
+UPDATE_URL = "https://busnavi.keihanbus.jp/pc/busstateupd"
+
+
+def parse_busstate(text: str, stop_name: str, stop_num: int) -> BusLocationResponse:
+    """
+    接近情報の本文を読み、各便に dgmpl・定刻・遅れを入れる。通信はしない。
+    読み込めなければ KeihanAPIError。
+    """
+    try:
+        res = BusLocationResponse.model_validate_json(text)
+        for bus in res.body.busstates:
+            bus.dgmpl = build_diagram_dgmpl(stop_name, stop_num, bus.html, bus.html_sp)
+            delay = parse_bus_delay(bus.html, bus.html_sp)
+            bus.scheduled_time = delay.scheduled_time
+            bus.delay_text = delay.delay_text
+            bus.delay_minutes = delay.delay_minutes
+    except ValueError as e:
+        raise KeihanAPIError(f"{UPDATE_URL} を読み込めませんでした: {e}") from e
+    return res
 
 
 @dataclass

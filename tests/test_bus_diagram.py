@@ -11,7 +11,8 @@ import httpx
 import pytest
 
 from keihan_tracker import BusDiagram, KeihanAPIError, fetch_diagram, get_khbus_info
-from keihan_tracker.bus import tracker as bus_tracker
+from keihan_tracker.bus import client as bus_client
+from keihan_tracker.bus.tracker import _default_client
 from keihan_tracker.train.tracker import JST, USER_AGENT
 
 from conftest import load_fixture_bytes, run
@@ -37,12 +38,12 @@ def api(monkeypatch):
         assert request.url.path == "/pc/linediagram"
         return httpx.Response(state["status"], content=state["diagram"])
 
-    monkeypatch.setattr(bus_tracker, "AsyncClient", lambda **kwargs: httpx.AsyncClient(
+    monkeypatch.setattr(bus_client, "AsyncClient", lambda **kwargs: httpx.AsyncClient(
         transport=httpx.MockTransport(handler), trust_env=False, **kwargs,
     ))
-    monkeypatch.setattr(bus_tracker, "_cache", {})
-    monkeypatch.setattr(bus_tracker, "_diagram_cache", {})
-    monkeypatch.setattr(bus_tracker, "_last_snapshot", {})
+    monkeypatch.setattr(_default_client, "_cache", {})
+    monkeypatch.setattr(_default_client, "_diagram_cache", {})
+    monkeypatch.setattr(_default_client, "_last_snapshot", {})
     return state
 
 
@@ -127,7 +128,7 @@ def test_diagram_request_uses_jst_and_unencoded_dgmpl(api, monkeypatch):
             assert tz == JST
             return cls(2026, 11, 7, 9, 3, tzinfo=datetime.timezone.utc).astimezone(tz)
 
-    monkeypatch.setattr(bus_tracker, "datetime", SimpleNamespace(datetime=FixedDatetime))
+    monkeypatch.setattr(bus_client, "datetime", SimpleNamespace(datetime=FixedDatetime))
     run(fetch_diagram(DGMPL))
     request = api["requests"][0]
     assert request.url.params == httpx.QueryParams({"mode": 4, "dgmpl": DGMPL, "dt": "202611071803"})
@@ -136,7 +137,7 @@ def test_diagram_request_uses_jst_and_unencoded_dgmpl(api, monkeypatch):
 
 def test_diagram_cache_expires_after_30_seconds(api, monkeypatch):
     current = [100.0]
-    monkeypatch.setattr(bus_tracker, "time", SimpleNamespace(monotonic=lambda: current[0]))
+    monkeypatch.setattr(bus_client, "time", SimpleNamespace(monotonic=lambda: current[0]))
     first = run(fetch_diagram(DGMPL))
     current[0] = 129.9
     assert run(fetch_diagram(DGMPL)) is first

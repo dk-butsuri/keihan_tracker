@@ -9,7 +9,8 @@ import httpx
 import pytest
 
 from keihan_tracker import KeihanAPIError
-from keihan_tracker.bus import tracker as bus_tracker
+from keihan_tracker.bus import client as bus_client
+from keihan_tracker.bus.tracker import _default_client
 from keihan_tracker.bus.tracker import get_khbus_info
 from keihan_tracker.train.tracker import USER_AGENT
 
@@ -40,11 +41,11 @@ def bus_api(monkeypatch):
         return httpx.Response(200, text=state["body"])
 
     monkeypatch.setattr(
-        bus_tracker, "AsyncClient",
+        bus_client, "AsyncClient",
         lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs),
     )
-    monkeypatch.setattr(bus_tracker, "_cache", {})
-    monkeypatch.setattr(bus_tracker, "_last_snapshot", {})
+    monkeypatch.setattr(_default_client, "_cache", {})
+    monkeypatch.setattr(_default_client, "_last_snapshot", {})
     return state
 
 
@@ -103,7 +104,7 @@ def test_bus_snapshot_saves_raw_response(bus_api, tmp_path, monkeypatch):
     assert gzip.decompress(saved[0].read_bytes()).decode("utf-8") == bus_api["body"]
 
     # 内容が同じなら保存しない。キャッシュを返したときも保存しない
-    monkeypatch.setattr(bus_tracker, "_cache", {})
+    monkeypatch.setattr(_default_client, "_cache", {})
     run(get_khbus_info("寝屋川市駅［東口］", 2, snapshot_dir=tmp_path))
     run(get_khbus_info("寝屋川市駅［東口］", 2, snapshot_dir=tmp_path))
     assert len(list(tmp_path.rglob("*.gz"))) == 1
