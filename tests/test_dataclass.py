@@ -139,7 +139,7 @@ def test_active_train_started_again_does_not_share_history(fresh_tracker):
     run(fresh_tracker.fetch_pos())
     wdf = next(iter(fresh_tracker.active_trains))
     inactive = fresh_tracker.state.active_trains[wdf].inactivate()
-    fresh_tracker.state.trains[wdf] = inactive
+    fresh_tracker.state._replace_train(wdf, inactive)
     # 位置情報にまた現れたときと同じ作り方
     again = ActiveTrainData(
         master=fresh_tracker.state, history=inactive.history, wdf=wdf, date=inactive.date,

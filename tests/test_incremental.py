@@ -8,7 +8,6 @@
 """
 
 import copy
-import dataclasses
 import datetime
 
 import pytest
@@ -289,34 +288,23 @@ def test_new_timetable_rebuilds(pair):
     assert pair.inc.trains[RUNNING].train_formation == 99999
 
 
-def test_trains_written_directly(api):
-    """self.trains を直接書き換えても、駅の trains・upcoming_trains と逆参照は合う（次の取得で全部作り直す）"""
+def test_trains_and_stations_are_read_only(api):
+    """trains・stations は読み取り専用。索引とずれないよう、書き換えは apply_* だけが行う"""
     tracker = make_tracker(api)
     run(tracker.fetch_pos())
-    check_consistency(tracker)
-    state = tracker.state
-
-    # 列車を消す・別のオブジェクトに替える・外から足す
-    removed = OTHER[3]
-    removed_train = tracker.trains[removed]
-    del tracker.trains[removed]
-    replaced = tracker.trains[OTHER[4]]
-    tracker.trains[OTHER[4]] = TrainData(
-        master=tracker, wdf=OTHER[4], date=replaced.date, has_premiumcar=False, train_formation=1,
-        route_stations=replaced.route_stations,
-    )
-    extra = TrainData(master=tracker, wdf=99999, date=replaced.date, has_premiumcar=False, train_formation=1,
-                      route_stations=[dataclasses.replace(s) for s in tracker.trains[OTHER[5]].route_stations])
-    tracker.trains[99999] = extra
-    # 駅の trains は、書き換えを見つけて索引を作り直す（逆参照も合わせ直す）
-    assert all(t is not removed_train for number in CHECK_STATIONS for t, _ in tracker.stations[number].trains)
-    check_consistency(tracker)
-    assert any(t is extra for t, _ in tracker.stations[18].trains) == (tracker.stations[18] in [s.station for s in extra.stop_stations])
-    assert state._external_change
-
-    # 取得を続けると、ダイヤにある列車は作り直される（外から足した列車は残る）
-    run(tracker.fetch_pos())
-    assert removed in tracker.trains and 99999 in tracker.trains
+    wdf = next(iter(tracker.trains))
+    for mapping in (tracker.trains, tracker.state.trains):
+        with pytest.raises(TypeError):
+            mapping[wdf] = mapping[wdf]
+        with pytest.raises(TypeError):
+            del mapping[wdf]
+    with pytest.raises(TypeError):
+        tracker.stations[17] = tracker.stations[17]
+    for owner in (tracker, tracker.state):
+        with pytest.raises(AttributeError):
+            owner.trains = {}
+        with pytest.raises(AttributeError):
+            owner.stations = {}
     check_consistency(tracker)
 
 

@@ -97,6 +97,7 @@ v3.0 で行う構造改定の計画です。2026-11-13 時点で決めたこと�
 旧名は v3 で消えるため、古いコードは `AttributeError` で気づけます。同じ名前のまま意味が変わるのは、次の `master` だけです。
 
 - **`master`**：`StationData` / `TrainData` / `TrainHistoryRecord` の `master` は、`KHTracker` から `KHState` に変わります（step 2 で変更）。状態（`stations`・`trains` など）は今までどおり読めますが、`fetch_pos()`・`web`・`snapshot_dir` など取得側のものは `master` から使えなくなります。取得は `KHTracker` 側で行ってください。`MIGRATION.md` にも書きます。
+- **`trains`・`stations`**：読み取り専用になります（`tracker.trains[wdf] = ...`・`del`・`tracker.trains = ...` はエラー）。読み方は今までどおりです。`MIGRATION.md` にも書きます。
 
 ### 4. レイヤー分割
 
@@ -214,7 +215,8 @@ class EtaResult:
    - 状況（2026-11-13）：済み。`parse.py`・`client.py`・`state.py` を作り、`KHTracker` は今の属性を property で `state` / `client` に委譲する。`master` は `KHState` になった（上の「3. 位置まわりの名前」の後の注意を参照）。ダイヤは位置情報の後に渡す（臨時列車は走行中のものだけ登録するため）。`KHState()` は営業日を持たずに始まり、`apply_positions` で決まる。モジュール名（`schemes`→`schemas` など）は変えていない
 3. dataclass 化、ダイヤの差分更新、索引
    - 状況（2026-11-13）：dataclass 化（3a）は済み。`slots=True, kw_only=True, eq=False`。pydantic の alias は `_init_aliases`、`master` の読み替えとリストの複製は `__post_init__` で保った。同値性テストは 104.9秒 → 74.5秒
-   - 状況（2026-11-13）：3b も済み。差分更新（全登録は新しいダイヤ・営業日の変化・`self.trains` の直接書き換えのときだけ）、駅→停車駅の索引、`StopStationData.train`、`get_stop` を入れた。保存したスナップショット1日分で `fetch` 1回 約98ms → 中央値 約1.7ms（ダイヤが変わる毎時だけ約250ms）
+   - 状況（2026-11-13）：3b も済み。差分更新（全登録は新しいダイヤ・営業日の変化のときだけ）、駅→停車駅の索引、`StopStationData.train`、`get_stop` を入れた。保存したスナップショット1日分で `fetch` 1回 約98ms → 中央値 約1.7ms（ダイヤが変わる毎時だけ約250ms）
+   - `trains`・`stations` を読み取り専用（`MappingProxyType`）にした。外から書き換えられると索引とずれるため。中身は `KHState._trains`・`_stations` に持ち、書き換えは `apply_*` だけが行う。3b で入れていた書き換えの見張り（`_ensure_index`）は消した。`route_stations` の中身を書き換えたときは `_rebuild_index()` を呼ぶ
    - 3b（差分更新・索引）で、停車駅の `train`・`get_stop` も入れる（「10. 停車駅」）。新しく走り出した列車は、今は毎回のダイヤ登録で停車駅を受け取っているため、差分更新ではその列車だけ登録し直す。営業日が変わったときは全部作り直す
 4. 位置まわりの改名、`position`、`status`、`find_trains` の `@overload`、比較（「9. 比較」）
 5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）

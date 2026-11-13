@@ -18,7 +18,8 @@ from .schemes import (TransferGuideInfo,
                       )
 from .parse import _parse_delay_minutes
 import warnings
-from typing import Optional, Literal, Sequence, TYPE_CHECKING
+from typing import Mapping, Optional, Literal, Sequence, TYPE_CHECKING
+from types import MappingProxyType
 import datetime
 from zoneinfo import ZoneInfo
 
@@ -39,8 +40,8 @@ def _deprecated(old: str, new: str) -> None:
 class KHState:
     """
     京阪電車の列車・駅の状態。
-    - stations: 全駅の辞書（駅番号:StationData）
-    - trains: 全列車の辞書（WDF番号:TrainData）
+    - stations: 全駅の辞書（駅番号:StationData）。読み取り専用
+    - trains: 全列車の辞書（WDF番号:TrainData）。読み取り専用
     - apply_stations, apply_positions, apply_timetable にパース済みのデータを渡して更新する
     """
     def __init__(self, date: Optional[datetime.date] = None) -> None:
@@ -55,11 +56,11 @@ class KHState:
         self.dia_confirmed_date: Optional[datetime.date] = None # ダイヤが今日のものだと確かめた営業日
         self._first_observed_date: Optional[datetime.date] = None
         self._first_observed_time: Optional[datetime.datetime] = None # その営業日に最初に位置情報を取れた時刻（fileCreatedTime）
-        # WDF番号:TrainData
-        ## 現在アクティブな列車リスト
-        self.trains:dict[int, TrainData|ActiveTrainData] = {}
-        ## 駅リスト
-        self.stations:dict[int, StationData] = {}
+        # 外からは trains・stations（読み取り専用）で見せる。索引とずれないよう、書き換えは apply_* だけが行う
+        ## WDF番号:TrainData
+        self._trains:dict[int, TrainData|ActiveTrainData] = {}
+        ## 駅番号:StationData
+        self._stations:dict[int, StationData] = {}
 
         # 以下はダイヤの差分更新と、駅→停車駅の索引のための内部状態（apply_timetable の docstring を参照）
         # テスト用：True なら、差分更新をせず、毎回全列車のダイヤを登録し直す
@@ -69,8 +70,16 @@ class KHState:
         self._timetable_by_wdf: dict[int, TrainInfo] = {}                # 最後に全登録したダイヤの、WDF番号:列車
         self._unregistered_wdfs: set[int] = set()                        # apply_positions で新しく作り、まだダイヤを登録していない列車
         self._stops_by_station: dict[int, dict[int, list[StopStationData]]] = {} # 駅番号:{WDF番号:停車する停車駅（走行順）}
-        self._index_signature: tuple = ((), ())                         # 索引が反映している self.trains の中身
-        self._external_change: bool = False                              # self.trains が直接書き換えられていた
+
+    @property
+    def trains(self) -> Mapping[int, TrainData|ActiveTrainData]:
+        """全列車（WDF番号:TrainData）。読み取り専用（書き換えると TypeError）"""
+        return MappingProxyType(self._trains)
+
+    @property
+    def stations(self) -> Mapping[int, StationData]:
+        """全駅（駅番号:StationData）。読み取り専用（書き換えると TypeError）"""
+        return MappingProxyType(self._stations)
 
     @property
     def position_created_at(self) -> Optional[datetime.datetime]:
@@ -83,7 +92,7 @@ class KHState:
     def active_trains(self) -> dict[int, ActiveTrainData]:
         from .tracker import ActiveTrainData
         d:dict[int, ActiveTrainData] = {}
-        for train in self.trains.values():
+        for train in self._trains.values():
             if isinstance(train, ActiveTrainData):
                 d[train.wdf] = train
         return d
@@ -105,10 +114,10 @@ class KHState:
                 for number, name in line_detail.stations.items():
                     number = int(number[2:])
                     # 既に登録されているなら路線に追加
-                    if number in self.stations:
-                        self.stations[number].line.add(line)
+                    if number in self._stations:
+                        self._stations[number].line.add(line)
                         continue
-                    self.stations[number] = StationData(
+                    self._stations[number] = StationData(
                                                 master = self,
                                                 line   = {line},
                                                 station_number = number,
@@ -119,12 +128,11 @@ class KHState:
             # transferGuideInfoから乗り換え情報を登録
             for number, transfers in self.transfer_guide_info.root.items():
                 number = int(number[2:])
-                self.stations[number].transfer = transfers
+                self._stations[number].transfer = transfers
 
     def apply_positions(self, train_position_list: trainPositionList) -> None:
         """列車の位置情報を反映する。営業日は fileCreatedTime から決める。"""
         from .tracker import ActiveTrainData
-        self._ensure_index()
         self.train_position_list = train_position_list
 
         # 日付更新
@@ -139,12 +147,12 @@ class KHState:
 
         # 前日の列車があれば削除
         old_wdfs: list[int] = []
-        for wdf, train in self.trains.items():
+        for wdf, train in self._trains.items():
             if train.date != self.date:
                 old_wdfs.append(wdf)
         for wdf in old_wdfs:
             self._index_remove(wdf)
-            del self.trains[wdf]
+            del self._trains[wdf]
 
         # もう運行終了したActiveTrainDataをinactive化する
         # 1. 現在アクティブな列車集合を取得
@@ -154,9 +162,9 @@ class KHState:
                 current_wdfs.add(train.wdfBlockNo)
 
         # 2. 差集合で もうアクティブでなくなった列車を計算
-        wdfs_to_delete = set([train for train in self.trains.keys()]) - current_wdfs
+        wdfs_to_delete = set([train for train in self._trains.keys()]) - current_wdfs
         for wdf in wdfs_to_delete:
-            train = self.trains[wdf]
+            train = self._trains[wdf]
             if isinstance(train, ActiveTrainData):
                 self._replace_train(wdf, train.inactivate())
 
@@ -166,9 +174,9 @@ class KHState:
             for train in trainlist.trainInfoObjects:
                 wdf = train.wdfBlockNo
                 # 存在しない/アクティブでないなら新規作成
-                if self.trains.get(wdf) == None or not isinstance(self.trains.get(wdf), ActiveTrainData):
+                if self._trains.get(wdf) == None or not isinstance(self._trains.get(wdf), ActiveTrainData):
                     # 一度消えてまた走り出した列車は、それまでの履歴と、ダイヤから登録した値（停車駅・編成・プレミアムカー）を引き継ぐ
-                    old = self.trains.get(wdf)
+                    old = self._trains.get(wdf)
                     new_active_train = ActiveTrainData(
                         master=self,
                         history = old.history if old else [],
@@ -178,7 +186,7 @@ class KHState:
                         wdf=wdf,
                         date=self.date,
                         train_number = train.trainNumber,
-                        destination = self.stations.get(train.destStationNumber),
+                        destination = self._stations.get(train.destStationNumber),
                         train_type = train.trainTypeJp,
                         is_special = train.is_special,
                         cars = train.carsOfTrain,
@@ -203,9 +211,9 @@ class KHState:
                         self._unregistered_wdfs.add(wdf)
                     new_active_train._record_history(self.train_position_list.fileCreatedTime)
 
-                elif type(self.trains[wdf]) == ActiveTrainData:
+                elif type(self._trains[wdf]) == ActiveTrainData:
                     # 可変の情報を更新
-                    active_train = self.trains[wdf]
+                    active_train = self._trains[wdf]
                     old_coordinate = (active_train.location_row, active_train.location_col)
                     new_coordinate = (trainlist.locationRow, trainlist.locationCol)
                     active_train.location_row = new_coordinate[0]
@@ -220,8 +228,8 @@ class KHState:
                     active_train.delay_minutes = _parse_delay_minutes(train.delayMinutes)
 
                     # 行先を更新（運転整理で変わることがある）。行先なし(00)の間は直前の値を保つ
-                    if train.destStationNumber in self.stations:
-                        active_train.active_destination = self.stations[train.destStationNumber]
+                    if train.destStationNumber in self._stations:
+                        active_train.active_destination = self._stations[train.destStationNumber]
 
                     # 方向を更新（出現直後の1分だけ誤った値になることがある）
                     # ただし終点に停車中は次の運行の向きに変わるため、そのままにする
@@ -235,25 +243,17 @@ class KHState:
                         active_train.position_since = self.train_position_list.fileCreatedTime
 
                     active_train._record_history(self.train_position_list.fileCreatedTime)
-        self._sync_index_signature()
 
     def _replace_train(self, wdf: int, train: TrainData) -> None:
         """
-        self.trains[wdf] を置き換える（辞書の中の位置は変わらない）。
+        self._trains[wdf] を置き換える（辞書の中の位置は変わらない）。
         停車駅は新しい列車が引き継ぐため、停車駅の逆参照（train）を付け替える。索引の中身（停車駅）は変わらない。
         """
-        self.trains[wdf] = train
+        self._trains[wdf] = train
         for stop in train.route_stations:
             stop.train = train
 
     # --- 駅→停車駅の索引 ---
-
-    def _trains_signature(self) -> tuple:
-        """self.trains の中身（キーとオブジェクトの並び）。索引が反映している内容と比べる"""
-        return (tuple(self.trains), tuple(map(id, self.trains.values())))
-
-    def _sync_index_signature(self) -> None:
-        self._index_signature = self._trains_signature()
 
     def _index_add(self, train: TrainData) -> None:
         """train の停車駅（stop_stations）を索引に加える"""
@@ -268,34 +268,24 @@ class KHState:
 
     def _rebuild_index(self) -> None:
         """
-        索引を self.trains から作り直す。停車駅の逆参照（train）も合わせ直す。
-        self.trains をライブラリを通さず書き換えたときは、これで合わせられる。
-        駅の trains・upcoming_trains と apply_* は、書き換えを見つけると自動で呼ぶ
-        （route_stations の中身だけを書き換えたときは見つけられないため、これを呼ぶ）。
+        索引を self._trains から作り直す。停車駅の逆参照（train）も合わせ直す。
+        列車の route_stations の中身を書き換えたときは、これを呼んで合わせる。
         """
         self._stops_by_station = {}
-        for train in self.trains.values():
+        for train in self._trains.values():
             for stop in train.route_stations:
                 stop.train = train
             self._index_add(train)
-        self._sync_index_signature()
-
-    def _ensure_index(self) -> None:
-        """self.trains が直接書き換えられていたら、索引を作り直す。次の apply_timetable は全列車を登録し直す"""
-        if self._trains_signature() != self._index_signature:
-            self._rebuild_index()
-            self._external_change = True
 
     def _stops_at(self, station: StationData) -> list[StopStationData]:
         """
-        station に停車する停車駅を、self.trains の並び順（同じ列車の中では走行順）で返す。
-        索引は駅ごとの辞書のため、並び順は self.trains のキーの順位で決め直す。
+        station に停車する停車駅を、self._trains の並び順（同じ列車の中では走行順）で返す。
+        索引は駅ごとの辞書のため、並び順は self._trains のキーの順位で決め直す。
         """
-        self._ensure_index()
         by_wdf = self._stops_by_station.get(station.station_number)
         if not by_wdf:
             return []
-        rank = {wdf: i for i, wdf in enumerate(self.trains)}
+        rank = {wdf: i for i, wdf in enumerate(self._trains)}
         stops: list[StopStationData] = []
         for wdf in sorted(by_wdf, key=rank.__getitem__):
             stops += by_wdf[wdf]
@@ -323,19 +313,16 @@ class KHState:
 
         毎回全列車を登録し直すと重いため、変わっていなければ作り直さない。
         - 全部作り直す：新しいダイヤ（starttime_list が最後に全登録したものと別のオブジェクト）、
-          営業日が最後に全登録したときと違う（時刻は営業日から作るため。前の日の列車は apply_positions が消している）、
-          self.trains が直接書き換えられていた
+          営業日が最後に全登録したときと違う（時刻は営業日から作るため。前の日の列車は apply_positions が消している）
         - 1本だけ登録する：それ以外のとき、apply_positions で初めて現れた列車（臨時列車が走り出したときなど）だけ
         - 何もしない：ほかの列車。停車駅・編成・プレミアムカーは、ダイヤの全登録から変わっていない。
           走り終えた列車と、また走り出した列車は、apply_positions が停車駅などを引き継ぐ
         """
         if self.date is None:
             raise ValueError("営業日が決まっていません。先に apply_positions を呼ぶか、KHState(date) で渡してください。")
-        self._ensure_index()
         self.starttime_list = starttime_list
 
         if (self._always_full_timetable
-                or self._external_change
                 or starttime_list is not self._registered_timetable
                 or self.date != self._registered_date):
             # startTimeListから全列車を登録
@@ -344,34 +331,32 @@ class KHState:
                 self._register_train(train)
             self._registered_timetable = starttime_list
             self._registered_date = self.date
-            self._external_change = False
             self._rebuild_index()
         else:
             for wdf in sorted(self._unregistered_wdfs):
                 train = self._timetable_by_wdf.get(wdf)
-                if train is not None and wdf in self.trains:
+                if train is not None and wdf in self._trains:
                     self._index_remove(wdf)
                     self._register_train(train)
-                    self._index_add(self.trains[wdf])
-            self._sync_index_signature()
+                    self._index_add(self._trains[wdf])
         self._unregistered_wdfs.clear()
 
     def _register_train(self, train: TrainInfo) -> None:
-        """ダイヤの1本分を、self.trains の列車に登録する（列車が無ければ作る）。索引は触らない"""
+        """ダイヤの1本分を、self._trains の列車に登録する（列車が無ければ作る）。索引は触らない"""
         from .tracker import TrainData, StopStationData
         assert self.date is not None
         # 臨時列車の場合
         if train.extTrain:
             # ActiveTrainDataがある場合、当日の便で確定するので登録
-            if train.wdfBlockNo in self.trains.keys():
+            if train.wdfBlockNo in self._trains.keys():
                 pass
             # 当日の便でない可能性があるため登録スキップ
             else:
                 return
 
         wdf = train.wdfBlockNo
-        if not wdf in self.trains:
-            self.trains[wdf] = TrainData(
+        if not wdf in self._trains:
+            self._trains[wdf] = TrainData(
                 master=self,
                 wdf=wdf,
                 has_premiumcar=bool(train.premiumCar),
@@ -379,17 +364,17 @@ class KHState:
                 date=self.date
             )
 
-        self.trains[wdf].train_formation = int(train.trainCar)
-        self.trains[wdf].has_premiumcar = bool(train.premiumCar)
+        self._trains[wdf].train_formation = int(train.trainCar)
+        self._trains[wdf].has_premiumcar = bool(train.premiumCar)
 
         # ダイヤ登録
-        self.trains[wdf].route_stations = []
+        self._trains[wdf].route_stations = []
         for stop_station in (train.diaStationInfoObjects):
             # 3桁の上２桁が駅番号。ほかの形は見たことがないので、仕様の変更に気付けるよう警告する
             if len(stop_station.stationNumber) != 3:
                 warnings.warn(f"[WDF{wdf}] 駅番号の形式を読めないため、この駅を飛ばしました: {stop_station.stationNumber!r}")
                 continue
-            station = self.stations.get(int(stop_station.stationNumber[0:2]))
+            station = self._stations.get(int(stop_station.stationNumber[0:2]))
 
             # 未登録の駅ならスキップ（寝屋川信号場など）
             if station == None:
@@ -397,14 +382,14 @@ class KHState:
 
             # もし出発駅なら-
             if stop_station.stationDepTime == "-":
-                self.trains[wdf].route_stations.append(
+                self._trains[wdf].route_stations.append(
                     StopStationData(
                         is_start = True,
                         is_final=False,
                         is_stop = True,
                         station = station,
                         time = None,
-                        train = self.trains[wdf],
+                        train = self._trains[wdf],
                         )
                     )
                 continue
@@ -418,25 +403,25 @@ class KHState:
             else:
                 time = datetime.datetime.combine(self.date, datetime.time.min) + datetime.timedelta(hours=ltime[0],minutes=ltime[1])
                 time = time.replace(tzinfo=JST)
-            self.trains[wdf].route_stations.append(
+            self._trains[wdf].route_stations.append(
                     StopStationData(
                         is_start = False,
                         is_stop = is_stop,
                         is_final = False,
                         station = station,
                         time = time,
-                        train = self.trains[wdf],
+                        train = self._trains[wdf],
                         )
                     )
 
         # まれに始発駅に時刻が登録される場合あり
         # https://web.archive.org/web/20260124090959/https://www.keihan.co.jp/zaisen-up/startTimeList.json?6f4653a2-5a0a-4a65-810d-f1917026b14b
-        if len([stop for stop in self.trains[wdf].route_stations if stop.is_start]) == 0:
-            start_station = min(self.trains[wdf].route_stations, key=lambda x:x.time or datetime.datetime.max.replace(tzinfo=JST))
+        if len([stop for stop in self._trains[wdf].route_stations if stop.is_start]) == 0:
+            start_station = min(self._trains[wdf].route_stations, key=lambda x:x.time or datetime.datetime.max.replace(tzinfo=JST))
             start_station.is_start = True
 
         # 終着駅（ダイヤの並び順は走行順。時刻不明の停車駅もあるため、時刻ではなく並び順で最後の停車駅とする）
-        final_station = [stop for stop in self.trains[wdf].route_stations if stop.is_stop][-1]
+        final_station = [stop for stop in self._trains[wdf].route_stations if stop.is_stop][-1]
         final_station.is_final = True
 
     def find_trains(
@@ -476,7 +461,7 @@ class KHState:
             if current_or_next_stop is None:
                 current_or_next_stop = next_stop_station
         trains: list[TrainData|ActiveTrainData] = []
-        for train in self.trains.values():
+        for train in self._trains.values():
             # 条件に合致するかチェック
             if active is not None       and isinstance(train, ActiveTrainData) != active:
                 continue

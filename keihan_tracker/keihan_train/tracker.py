@@ -913,8 +913,9 @@ class KHTracker:
     dia_confirmed_date = _state_property("dia_confirmed_date")   # ダイヤが今日のものだと確かめた営業日
     _first_observed_date = _state_property("_first_observed_date")
     _first_observed_time = _state_property("_first_observed_time") # その営業日に最初に位置情報を取れた時刻（fileCreatedTime）
-    trains = _state_property("trains")                           # WDF番号:TrainData
-    stations = _state_property("stations")                       # 駅番号:StationData
+    # 読み取り専用（書き換えると TypeError）
+    trains = property(lambda self: self.state.trains, doc="WDF番号:TrainData。読み取り専用")
+    stations = property(lambda self: self.state.stations, doc="駅番号:StationData。読み取り専用")
 
     # KHClient の属性。代入もできる
     web = _client_property("web")                                # 代入すると、取得に使う AsyncClient が替わる
