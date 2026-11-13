@@ -57,6 +57,52 @@ class TrainType(str, Enum):
     RAPID_LTD_EXP = "快速特急 洛楽"
     EXTRA_TRAIN = "臨時列車"  # 臨時列車は臨時特急や臨時休校などとは別
 
+    # --- 順位での比較 ---
+    # 順位は定義順（低い順）。== と hash は str のまま（TrainType.LTD_EXP == "特急" は True）
+    def _rank_pair(self, other: object) -> Optional[tuple[int, int]]:
+        """
+        self と other の順位を返す。臨時列車が絡むと None（順位が分からない）。
+        str は TrainType に直して比べる。TrainType は str を継承しているため、NotImplemented を返すと
+        Python が str の比較（文字コード順）にすり替えて、黙って間違った答えを返してしまう。
+        """
+        if isinstance(other, str) and not isinstance(other, TrainType):
+            other = TrainType(other)   # 種別にない文字列は ValueError
+        if not isinstance(other, TrainType):
+            raise TypeError(f"TrainType は {type(other).__name__} と順位を比べられません")
+        if self is TrainType.EXTRA_TRAIN or other is TrainType.EXTRA_TRAIN:
+            return None
+        return _TRAIN_TYPE_RANK[self], _TRAIN_TYPE_RANK[other]
+
+    def __lt__(self, other: object) -> bool:
+        """
+        種別の順位（普通が最も低く、快速特急 洛楽が最も高い）で比べる。str とも比べられる（TrainType に直す）。
+        臨時列車は順位が分からないため、< <= > >= はすべて False を返す。
+        臨時列車は NaN と同じ扱いなので、sorted() に混ぜると並びが崩れる。
+        種別にない str は ValueError、str・TrainType 以外は TypeError。
+        """
+        ranks = self._rank_pair(other)
+        return ranks is not None and ranks[0] < ranks[1]
+
+    def __le__(self, other: object) -> bool:
+        """順位が低いか同じか。__lt__ を参照"""
+        ranks = self._rank_pair(other)
+        return ranks is not None and ranks[0] <= ranks[1]
+
+    def __gt__(self, other: object) -> bool:
+        """順位が高いか。__lt__ を参照"""
+        ranks = self._rank_pair(other)
+        return ranks is not None and ranks[0] > ranks[1]
+
+    def __ge__(self, other: object) -> bool:
+        """順位が高いか同じか。__lt__ を参照"""
+        ranks = self._rank_pair(other)
+        return ranks is not None and ranks[0] >= ranks[1]
+
+# 種別の順位（EXTRA_TRAIN は順位が分からないため入れない）
+_TRAIN_TYPE_RANK: dict[TrainType, int] = {
+    t: i for i, t in enumerate(t for t in TrainType if t is not TrainType.EXTRA_TRAIN)
+}
+
 LineLiteral = Literal["京阪本線・鴨東線","中之島線","交野線","宇治線"]
     
 # 1. 言語別の路線名リストを表現するモデル

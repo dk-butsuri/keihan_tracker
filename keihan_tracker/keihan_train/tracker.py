@@ -284,6 +284,14 @@ class StopStationData:
     - station: 駅データ
     - time: 公式のダイヤの stationDepTime（発車時刻）。始発駅は公式のデータが "-" のため None（datetime）
     - train: この停車駅を持つ列車（逆参照）。いつも KHState.trains に今入っている列車を指す
+
+    比較と引き算
+    - ==・hash は同一性（is と同じ）。同じ時刻の別の停車駅は等しくない
+    - < <= > >= は time だけで比べる。別の列車の停車駅とも比べられる（京橋に先に着くのはどちらか、など）。
+      どちらかの time が None なら NaN と同じ扱いで、4つとも False
+    - b - a は timedelta（b.time - a.time）。どちらかの time が None なら None
+    順序の比較は時刻だけを見る。同じ時刻の別の停車駅は a <= b と b <= a が両方 True でも a != b
+    （set の < と同じ部分的な順序）。
     """
 
     is_start:   bool = False   # 始発駅かどうか
@@ -294,13 +302,43 @@ class StopStationData:
     # 列車が置き換わる（走り出す・運行終了）と付け替える。repr に含めると、列車の repr と循環する
     train:      Optional["TrainData"] = dataclasses.field(default=None, repr=False)
 
-# eq=False: 列車は同一性で比べる（値で比べる箇所は無い。master を含む全フィールドの比較も避ける）
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, StopStationData):
+            return NotImplemented
+        return self.time is not None and other.time is not None and self.time < other.time
+
+    def __le__(self, other: object) -> bool:
+        if not isinstance(other, StopStationData):
+            return NotImplemented
+        return self.time is not None and other.time is not None and self.time <= other.time
+
+    def __gt__(self, other: object) -> bool:
+        if not isinstance(other, StopStationData):
+            return NotImplemented
+        return self.time is not None and other.time is not None and self.time > other.time
+
+    def __ge__(self, other: object) -> bool:
+        if not isinstance(other, StopStationData):
+            return NotImplemented
+        return self.time is not None and other.time is not None and self.time >= other.time
+
+    def __sub__(self, other: object) -> Optional[datetime.timedelta]:
+        if not isinstance(other, StopStationData):
+            return NotImplemented
+        if self.time is None or other.time is None:
+            return None
+        return self.time - other.time
+
+# eq=False: dataclass の == は使わず、下の __eq__ / __hash__（date と wdf で比べる）を使う
 @dataclasses.dataclass(slots=True, kw_only=True, eq=False)
 class TrainData:
     """
     列車情報を表すクラス。
     - 列車番号、種別、編成、行先、停車駅リストなどを保持
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
+    - ==・hash は (date, wdf) で比べる。ActiveTrainData と、それを inactivate() した TrainData は等しい（同じ列車）。
+      set や辞書のキーに使える。列車同士の < は無い（種別の順位は train_type で比べる）
+    - station in train: その列車がその駅に停車するか
     """
     master:     "KHState"
     # WDF番号（その日の列車を区別する番号）
@@ -323,6 +361,19 @@ class TrainData:
         self.master = _unwrap_master(self.master)
         self.route_stations = list(self.route_stations)
         self.history = list(self.history)
+
+    def __eq__(self, other: object) -> bool:
+        # WDF番号は1日の中でしか列車を区別しないため、日付も見る。サブクラスは上書きしない
+        if not isinstance(other, TrainData):
+            return NotImplemented
+        return (self.date, self.wdf) == (other.date, other.wdf)
+
+    def __hash__(self) -> int:
+        return hash((self.date, self.wdf))
+
+    def __contains__(self, station: object) -> bool:
+        """station in train。その駅に停車するか。通過駅・ダイヤが無い列車・駅でない値は False"""
+        return isinstance(station, StationData) and self.get_stop(station) is not None
 
     @property
     def has_dia(self) -> bool:
