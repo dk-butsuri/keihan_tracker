@@ -42,6 +42,7 @@ def api(monkeypatch):
     ))
     monkeypatch.setattr(bus_tracker, "_cache", {})
     monkeypatch.setattr(bus_tracker, "_diagram_cache", {})
+    monkeypatch.setattr(bus_tracker, "_last_snapshot", {})
     return state
 
 
@@ -190,3 +191,85 @@ def test_diagram_http_error_is_not_cached(api):
     api["status"] = 200
     assert len(run(fetch_diagram(DGMPL)).stops) == 17
     assert len(api["requests"]) == 2
+
+
+def test_diagram_snapshot_saves_raw_response(api, tmp_path):
+    run(fetch_diagram(DGMPL, snapshot_dir=tmp_path))
+    saved = list(tmp_path.rglob("*.gz"))
+    # dgmpl の「:」はファイル名に使えないので _ にする
+    assert [p.name.split("_", 1)[1] for p in saved] == ["linediagram_同志社香里_1_1_75120_17_12.html.gz"]
+    assert gzip.decompress(saved[0].read_bytes()) == api["diagram"]
+
+
+# 2026-11-13 に実際に遅れていた便（[22] 寝屋川市駅行）の HTML。PC 版の見出しまでを抜き出した
+DELAYED_HTML = """
+<div class="pc divbusstate ">
+    <input type="hidden" class="bus_key" value="7512:9:1271:7512" />
+    <div class="fl bsno">1</div>
+    <div class="fl bsdtl">
+        <div class="bsul first">
+            <span class="bsmidashi">定刻：</span>
+            21:11
+            <span class="bsmidashi">(約1分遅れ)</span>
+            <span class="signal_status">受信中</span>
+        </div>
+        <ul class="bsul first">
+            <li class="more_min delay">約9分後に到着</li>
+            <li class="time">
+                21:12 到着予定
+            </li>
+        </ul>
+    </div>
+</div>
+"""
+
+
+def test_delay_read_from_saved_response(api):
+    """保存した応答には、到着済・定時運行中・未受信の便がある"""
+    buses = run(get_khbus_info("同志社香里", 1)).body.busstates
+    assert [(b.scheduled_time, b.delay_text, b.delay_minutes) for b in buses] == [
+        ("17:53", "到着済", None),
+        ("18:13", "定時運行中", 0),
+        ("18:33", "定時運行中", 0),
+        ("18:53", "定時運行中", 0),
+        ("19:12", None, None),
+        ("19:32", None, None),
+        ("19:52", None, None),
+    ]
+
+
+def test_delay_read_from_delayed_bus(api):
+    bus = api["location"]["body"]["busstates"][0]
+    bus["html"] = DELAYED_HTML
+    bus["busstateprms"] = bus["busstateprms"].rsplit(":", 2)[0] + ":約9分後に到着:21__________12 到着予定"
+    bus = run(get_khbus_info("同志社香里", 2)).body.busstates[0]
+    assert (bus.scheduled_time, bus.delay_text, bus.delay_minutes) == ("21:11", "約1分遅れ", 1)
+    assert bus.busstateprms.timetable == "21:12 到着予定"
+
+
+@pytest.mark.parametrize("text, minutes", [
+    ("約1分遅れ", 1),
+    ("約15分遅れ", 15),
+    ("約1時間遅れ", 60),
+    ("約1時間5分遅れ", 65),
+])
+def test_delay_text_formats(text, minutes):
+    from keihan_tracker.bus.parsing import parse_bus_delay
+    html = DELAYED_HTML.replace("約1分遅れ", text)
+    assert parse_bus_delay(html).delay_minutes == minutes
+
+
+def test_delay_read_from_mobile_html():
+    from keihan_tracker.bus.parsing import parse_bus_delay
+    html = """<dd class="sp tableDetail divbusstate"><ul class="bsul"><li class="busstate_header">
+        <div class="fl bsno">1</div><span class="bsmidashi">定刻：</span> 21:11
+        <span class="bsmidashi">(約3分遅れ)</span><span class="signal_status">受信中</span></li></ul></dd>"""
+    delay = parse_bus_delay(None, html)
+    assert (delay.scheduled_time, delay.delay_minutes) == ("21:11", 3)
+
+
+def test_unknown_delay_text_warns_and_keeps_text():
+    from keihan_tracker.bus.parsing import parse_bus_delay
+    with pytest.warns(UserWarning, match="遅れの表記"):
+        delay = parse_bus_delay(DELAYED_HTML.replace("約1分遅れ", "運休"))
+    assert (delay.delay_text, delay.delay_minutes) == ("運休", None)

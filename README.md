@@ -39,7 +39,7 @@
   │
   └── .trains   (全列車: dict)
         └── [TrainData|ActiveTrainData] (列車)
-               ├── .next_stop_station ──→ 次に止まる [StationData]
+               ├── .current_or_next_stop ──→ 停車中の駅か、次に止まる [StationData]
                ├── .stop_stations     ──→ 停車駅リスト
                ├── .train_type        ──→ 種別（予定の列車は停車駅から推定）
                ├── .direction         ──→ 方向（予定の列車は始発・終着から推定）
@@ -134,7 +134,7 @@ if __name__ == "__main__":
 
 `estimated_delay_minutes` は、公式値が120分以上のときに、ダイヤの予定到着時刻と位置情報・履歴から遅延の下限を推定します。表示するなら「少なくとも150分遅れ」のように使います。実際の遅延分数や到着予測そのものではなく、材料が足りなければ120分のままです。計算方法と限界は[信頼性ドキュメント](docs/RELIABILITY.md#2時間以上の遅延下限推定)を参照してください。
 
-遅延分数を停車時刻表に表示する際は、どこで何分間止まっているか（`is_at_station` なら `next_station` の駅、そうでなければ駅間）を表示すると良いでしょう。
+遅延分数を停車時刻表に表示する際は、どこで何分間止まっているか（`position.station` があればその駅、なければ `position.behind` と `position.ahead` の駅間）を表示すると良いでしょう。
 
 ```python
 # train は ActiveTrainData
@@ -197,6 +197,7 @@ async def main():
         prms = bus.busstateprms
         print(f"[{prms.route}] {prms.destination} 行き")
         print(f"  状況: {prms.status} (予定: {prms.timetable})")
+        print(f"  定刻: {bus.scheduled_time} 遅れ: {bus.delay_minutes} 分 ({bus.delay_text})")
         print(f"  現在地: 緯度{prms.lat}, 経度{prms.lon}")
         print("\n")
 
@@ -216,6 +217,14 @@ if __name__ == "__main__":
 キーがない場合は `None` です。接近情報を取るだけでは、発着時刻表への追加の通信は発生しません。
 `fetch_diagram()` は同じ `dgmpl` の結果を30秒間キャッシュします。
 時刻は公式の発着時刻表の値で、遅延を加算しません。`△` が付く推定時刻はフラグで区別します。
+
+`get_khbus_info()` と `fetch_diagram()` も、`KHTracker` と同じく `snapshot_dir` を指定すると、取得した応答をそのまま保存します（デバッグ用）。
+ファイル名は `snapshot_dir/YYYYMMDD/HHMMSS.mmm_busstateupd_バス停名_のりば.json.gz` と `..._linediagram_dgmpl.html.gz` です（`dgmpl` の `:` などファイル名に使えない文字は `_` にします）。
+前回と内容が同じ場合や、30秒以内のキャッシュを返した場合は保存しません。パースに失敗した応答も保存します。
+
+```python
+bus_info = await get_khbus_info("京阪香里園", 1, snapshot_dir="snapshots")
+```
 
 ## 表示する側（サイネージなど）でやること
 
@@ -246,16 +255,16 @@ if __name__ == "__main__":
 ### 公式データの癖
 
 1.  **「走行中」と「予定」の列車クラスの違い**
-    *   **ActiveTrainData**: 現在APIに位置情報が存在する列車です。`is_stopping` (停車中か) や `location_col` (座標) などのリアルタイムなプロパティを持ちます。
-    *   **TrainData**: ダイヤ上の予定データ、または運行終了したデータです。これらには現在位置情報がないため、`is_stopping` などのプロパティにアクセスするとエラーにはなりませんが、常にFalseなどのデフォルト値であったり、意味を持たない場合があります。
+    *   **ActiveTrainData**: 現在APIに位置情報が存在する列車です。`stopped_at` (停車中の駅) や `position` (線路上の位置) などのリアルタイムなプロパティを持ちます。
+    *   **TrainData**: ダイヤ上の予定データ、または運行終了したデータです。これらには現在位置情報がないため、`stopped_at` や `position` などの走行中の列車だけが持つプロパティはありません。
     *   `tracker.trains` には両方が混在しています。区別するには `isinstance(train, ActiveTrainData)` を使用してください。
     *   **ダイヤに臨時列車として載っている列車は、位置情報に現れるまで登録されません。** 公式のダイヤには、その日に走らない臨時列車も載っているためです（[信頼性ドキュメント](https://github.com/dk-butsuri/keihan_tracker/blob/main/docs/RELIABILITY.md#公式データにない情報確認できていないこと)）。そのため臨時列車は、走り出すまで `trains` / `upcoming_trains` / `find_trains()` に出ません。位置情報に現れた時点で `ActiveTrainData` として登録され、ダイヤの停車駅・時刻も使えるようになります。
 
 2.  **ダイヤに無い列車が走ることがある**
     *   運休・運転整理（2026年4月28日の停電によるダイヤ乱れで確認）や一部の臨時列車では、位置情報にはあるがダイヤ（startTimeList）には無い列車が `ActiveTrainData` として登録されます。`has_dia` で判別できます。
-    *   種別・行先・方向・`is_special` は位置情報から取得するため正確ですが、停車駅・時刻・始発駅・プレミアムカー・編成番号は分かりません。`start_station` は `DiaNotFoundError`（`ValueError` のサブクラス）を送出し、`stop_stations` は空、`next_stop_station` は `None` になります。
+    *   種別・行先・方向・`is_special` は位置情報から取得するため正確ですが、停車駅・時刻・始発駅・プレミアムカー・編成番号は分かりません。`start_station` は `DiaNotFoundError`（`ValueError` のサブクラス）を送出し、`stop_stations` は空、`current_or_next_stop`・`next_stop`・`stopped_at` は `None` になります。
     *   ダイヤに無い列車は、`StationData.arriving_trains` / `upcoming_trains` / `trains` には含まれません。
-    *   ダイヤが乱れている間は、ダイヤに載っている列車でも `stop_stations` や `next_stop_station` が実際の運行と異なる場合があります。また、停車駅の時刻が不明（`None`）になることがあります。時刻不明の停車は、`StationData.trains` / `upcoming_trains` では時刻順の最後に並びます。
+    *   ダイヤが乱れている間は、ダイヤに載っている列車でも `stop_stations` や `current_or_next_stop` が実際の運行と異なる場合があります。また、停車駅の時刻が不明（`None`）になることがあります。時刻不明の停車は、`StationData.trains` / `upcoming_trains` では時刻順の最後に並びます。
 
 3.  **公式APIが壊れたデータを返すことがある**
     *   末尾にNULが付いたJSONや、途中で切れたJSONが返ることがあります（2026年10月7日の朝に4分間で2回確認）。このとき `fetch_pos()` は `KeihanAPIError`（`ValueError` のサブクラス）を送出します。通信の失敗は `httpx.HTTPError` になります。
@@ -264,7 +273,25 @@ if __name__ == "__main__":
 
 4.  **寝屋川市止まりの一部は、着いたあと寝屋川信号場へ回送される**
     *   ダイヤでは寝屋川市の後に寝屋川信号場（駅番号99）が続く列車があり、寝屋川市に着いたあとも同じ列車のまま萱島方向へ走ります（2026年10月8日 0:05に確認）。公式の行先は寝屋川市のままです。
-    *   寝屋川信号場は駅として登録していないため、この間は `next_station` が萱島、`next_stop_station` が `None` になります。萱島の `upcoming_trains` には出ません。
+    *   寝屋川信号場は駅として登録していないため、この間は `position.ahead` が萱島、`current_or_next_stop` が `None` になります。萱島の `upcoming_trains` には出ません。
+
+## v3 に向けた名前の変更
+
+v3 で削除する名前は、v2.9 から `DeprecationWarning` を出します。警告文に書き換え先があります。新しい名前は v2.9 から使えます。
+
+| v2.8 まで | v2.9 から |
+|:---|:---|
+| `next_station` | 駅にいるなら `position.station`、駅間なら `position.ahead` |
+| `next_stop_station` | `current_or_next_stop`（同じ値） |
+| `is_stopping` | `stopped_at is not None` |
+| `is_at_station` | `position.station is not None` |
+| `TrainHistoryRecord.stopping_station` / `is_at_station` | `position.station` / `position.station is not None` |
+| `wdfBlockNo` | `wdf` |
+| `find_trains(next_stop_station=...)` | `find_trains(current_or_next_stop=...)` |
+| `regist_dia()` | 呼ばなくてよい（`fetch_pos()` が必要なときに取得する） |
+| `fetch_filelist()` | なし（未実装のまま削除） |
+
+`next_stop` は「停車中の駅を含まない次の停車駅」で、`next_stop_station` とは値が違います。`next_stop_station` の書き換え先は `current_or_next_stop` です。
 
 ## クラスリファレンス
 
@@ -290,7 +317,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 
 #### 主要メソッド
 *   `async fetch_pos()`: **[重要]** 最新の列車位置・遅延情報をAPIから取得し、インスタンス内のデータを更新します。公式APIが壊れたデータを返すと `KeihanAPIError` を送出します。
-*   `async regist_dia(download: bool)`: ダイヤ情報を更新します。通常は `fetch_pos()` から自動的に呼び出される（1時間に1回取り直す。日付が変わった直後は、走行中の列車の行先とダイヤの終着駅が一致するまで、5時30分まで取得のたびに取り直す）ため、実行する必要はありません。
+*   `async regist_dia(download: bool)`: **【非推奨・v3で削除】** ダイヤ情報を更新します。通常は `fetch_pos()` から自動的に呼び出される（1時間に1回取り直す。日付が変わった直後は、走行中の列車の行先とダイヤの終着駅が一致するまで、5時30分まで取得のたびに取り直す）ため、実行する必要はありません。
 *   `find_trains(...)`: 条件に合致する列車をリストで返します。全引数はオプションで、省略した項目は絞り込み対象外となります。
 *   `delay_growing_trains(line=None, window=timedelta(minutes=5), ratio=0.9)`: `is_delay_growing(window, ratio)` が `True` の走行中の列車を返します。運行が止まっているかの手がかりになります。`line` を指定すると、今その路線にいる列車だけを返します。実際に止まったときに当てはまった本数は、[信頼性ドキュメント](https://github.com/dk-butsuri/keihan_tracker/blob/main/docs/RELIABILITY.md#運行が止まったとき)にあります。
 
@@ -305,7 +332,8 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 | `train_number` | `str` | 列車番号（例: `"1051"`）（走行中の列車のみ。指定すると走行中でない列車は該当しない） |
 | `has_premiumcar` | `bool` | プレミアムカー連結の有無 |
 | `destination` | `StationData` | 行先駅 |
-| `next_stop_station` | `StationData` | 次の停車駅（走行中の列車のみ。指定すると走行中でない列車は該当しない） |
+| `current_or_next_stop` | `StationData` | 停車中の駅か次の停車駅（走行中の列車のみ。指定すると走行中でない列車は該当しない） |
+| `next_stop_station` | `StationData` | **【非推奨・v3で削除】** `current_or_next_stop` と同じ |
 | `min_delay` | `int` | この分数を**超える**遅延のみ対象 |
 | `max_delay` | `int` | この分数**未満**の遅延のみ対象 |
 | `is_stopping` | `bool` | 停車中かどうか（走行中の列車のみ。指定すると走行中でない列車は該当しない。`is_stopping` が `None` の列車はどちらを指定しても該当しない） |
@@ -330,7 +358,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 #### TrainData (基底クラス)
 全ての列車のベースとなるクラスです。主にダイヤ情報（静的な予定）を保持します。
 *   `master`: KHTrackerインスタンス
-*   `wdfBlockNo: int`: WDF番号
+*   `wdf: int`: WDF番号（v2.8 までの `wdfBlockNo` は非推奨・v3で削除）
 *   `date: datetime.date`: この列車が属する営業日。0〜4時の深夜帯は前日扱いとハードコーディングされています。
 *   `destination: StationData`: 行先駅
 *   `start_station: StationData`: 始発駅。ダイヤに無い列車では `DiaNotFoundError` を送出します
@@ -351,10 +379,14 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 
 #### ActiveTrainData (継承クラス)
 現在走行中の列車です。`TrainData` に加え、以下の**リアルタイム情報**を持ちます。
-*   `is_stopping: Optional[bool]`: 現在、駅に停車中かどうか。駅の位置にいても、その駅を通過する場合は `False`。次の停車駅が分からない（ダイヤに無い列車など）ときは `None`
-*   `is_at_station: bool`: 駅の位置座標にいるかどうか。座標だけで判定するため、通過中でも `True` になる
-*   `next_stop_station: StationData`: 次に停車する駅（**停車中の場合はその駅**）
-*   `next_station: StationData`: 次に停車・**通過**する駅
+*   `stopped_at: Optional[StationData]`: 停車中の駅。駅の位置にいても、その駅を通過する場合や、停車駅が分からない（ダイヤに無い列車など）ときは `None`
+*   `next_stop: Optional[StationData]`: この先で次に停車する駅。**停車中の駅は含みません**。終点にいるときなど、分からなければ `None`
+*   `current_or_next_stop: Optional[StationData]`: 停車中ならその駅、でなければ次に停車する駅（発車標用）
+*   `position: TrainPosition`: 座標から分かる線路上の位置。停車か通過かはダイヤによるため含みません
+    *   `station`: 駅の位置座標にいるならその駅（停車中・通過中）。駅間なら `None`
+    *   `behind`: 駅間なら後ろの駅。駅にいるなら `None`
+    *   `ahead`: 進行方向の次の駅。路線の端の駅にいるなら `None`
+    *   `line`: 走っている路線
 *   `destination: Optional[StationData]`: 行先駅。位置情報の行先が「00」（行先なし）のときはダイヤの終着駅、ダイヤも無ければ `None`
 *   `delay_minutes: int`: 公式の遅延分数（定刻なら0、「2時間以上」なら120）
 *   `estimated_delay_minutes: int`: 遅延分数の下限推定。`delay_minutes < 120` なら公式値をそのまま返し、120分以上なら予定到着時刻と位置情報・履歴から求めた候補との最大値を返します。次の停車駅が不明なら公式値を返し、時刻・履歴が足りない候補は使いません。`delay_minutes` や履歴の公式値は変更しません。詳しくは[計算方法と限界](docs/RELIABILITY.md#2時間以上の遅延下限推定)を参照してください
@@ -363,7 +395,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `cars: int`: 車両数
 *   `location_col`, `location_row`: zaisen上のグリッド座標
 *   `is_special: bool`: 臨時列車かどうか
-*   `is_at_start_station: Optional[bool]`: 現在、始発駅に停車中かどうか（`is_stopping` が `None` のときは `None`）
+*   `is_at_start_station: Optional[bool]`: 現在、始発駅に停車中かどうか（停車駅が分からないときは `None`）
 *   `staying_time: datetime.timedelta`: 今の座標に留まっている時間。駅でも駅間でも、座標が変わらなければ増える。最後に取得した位置情報の作成時刻で測るため、取得の間やAPIが止まっている間は増えない。座標が粗いため走行中でも数分は増えることがあり、出現直後はそれ以前の時間を含まない
 *   `position_since: Optional[datetime.datetime]`: 今の座標に来た時刻（位置情報の作成時刻）
 *   `delay_growth_rate(window=timedelta(minutes=5)) -> Optional[float]`: 遅延の増える速さ（分/分）。最新の位置情報と、それより `window` 以上前で最も新しい位置情報の時点を比べ、遅延の増えを経過時間で割ります。1.0 なら、止まっているのと同じ速さで遅延が増えています。遅れを取り戻しているときはマイナスです。比べられる記録が無い（現れてから `window` が経っていない）ときは `None` です。遅延が「2時間以上」になると `delay_minutes` は120で止まるため、止まったままでも0になります
@@ -380,6 +412,17 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 *   `upcoming_trains: list[tuple[TrainData | ActiveTrainData, StopStationData]]`: 停車中、もしくは**今後**停車する全列車とその到着時刻のリスト（時刻順）。
     *   走行中の列車は、停車駅の並びで次の停車駅以降にこの駅があれば含みます。
     *   走行中でない列車は、`was_active` でなく、この駅の予定時刻が、その営業日に最初に位置情報を取れた時刻より後なら含みます（時刻不明なら、その先の時刻が分かっている停車駅で判定し、どれも不明なら含みます）。予定時刻を過ぎても、走り出さないかぎり含み続けます。運転見合わせ中は遅れて来るかもしれず、運休になったかは公式データから分からないためです。予定時刻をどれだけ過ぎたら出さないかは、使う側で決めてください。
+*   `fastest_arrivals: dict[StationData, tuple[TrainData | ActiveTrainData, datetime]]`: この駅から乗れる列車（`upcoming_trains`）で、この先の各駅に**最も早く着く列車**とその到着時刻。「〇〇には先着」の表示に使えます。
+    *   乗り換えは考えません（乗ったまま着く時刻で比べます）。到着時刻はダイヤの予定時刻で、遅延を足しません。
+    *   時刻不明の停車駅は使いません。到着時刻が同じなら、この駅を先に出る列車を返します。この駅自身はキーに含みません。
+    ```python
+    station = tracker.stations[18]  # 香里園
+    fastest = station.fastest_arrivals
+    for train, stop in station.upcoming_trains[:5]:
+        first = [s for s, (t, _) in fastest.items() if t is train]
+        names = "・".join(str(s) for s in first[:3])
+        print(f"{stop.time:%H:%M} {train.train_type.value} {train.destination}行き", f"（{names}に先着）" if names else "")
+    ```
 *   `trains: list[tuple[TrainData | ActiveTrainData, StopStationData]]`: **過去・現在・未来すべて**の停車列車リスト（時刻順）。`upcoming_trains` が「これから停車する列車」のみを返すのに対し、こちらはすでに通過済みの列車も含みます。発車標ではなく運行履歴や全停車情報が必要な場合に使用します。
 
 いずれもダイヤの停車駅から探すため、ダイヤに無い列車（`has_dia` が `False`）は含まれません。
@@ -402,14 +445,16 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
    * direction: Literal["up","down"]: 方向
    * destination: Optional[StationData]: 行先駅
    * line: LineLiteral: その時点で走っていた路線
-   * stopping_station: Optional[StationData]: その時点の座標が示す駅。駅間ならNone。座標による判定なので、通過中でも駅を返します
-   * is_at_station: bool: その時点で駅の位置座標にいたか
+   * position: TrainPosition: その時点の線路上の位置（`ActiveTrainData.position` と同じ）
 
 ### BusLocationResponse / BusStatePrms (バス)
 バス接近情報のレスポンスモデル。
 
 *   `BusLocationResponse.body.busstates`: `BusState` のリスト
 *   `BusState.dgmpl: Optional[str]`: この便の `fetch_diagram(dgmpl)` に渡す値。HTML にキーがなければ `None`
+*   `BusState.scheduled_time: Optional[str]`: 定刻（`HH:MM`）
+*   `BusState.delay_text: Optional[str]`: 見出しの括弧内の表記（「定時運行中」「約1分遅れ」「到着済」）。位置を受信していない便は括弧が無いため `None`
+*   `BusState.delay_minutes: Optional[int]`: 遅れ（分）。定時運行中なら0。未受信・到着済、読めない表記（警告を出す）なら `None`。公式の「約N分遅れ」の値で、`busstateprms.timetable` の「到着予定」は定刻にこの遅れを足した時刻
 *   `BusState.busstateprms`: 詳細情報オブジェクト
     *   `route: str`: 系統番号 (例: "[22]")
     *   `destination: str`: 行先

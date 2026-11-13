@@ -19,7 +19,7 @@ from .schemes import (TransferGuideInfo,
                       )
 from . import stations_map
 from .position_calculation import calc_position
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 import warnings
 from typing import Optional, Literal, Sequence, TypeVar
 from httpx import AsyncClient, Response
@@ -63,6 +63,29 @@ def _parse(model: type[_Model], text: str, url: str) -> _Model:
         raise KeihanAPIError(f"{url} を読み込めませんでした: {e}") from e
 
 
+async def write_snapshot(snapshot_dir: Path, name: str, body: bytes, last: dict[str, bytes]) -> None:
+    """
+    取得したレスポンスを snapshot_dir/YYYYMMDD/HHMMSS.mmm_name.gz に保存する（デバッグ用）。
+    last[name] と同じ内容なら保存しない。保存できたら last[name] を更新する。
+    """
+    if last.get(name) == body:
+        return
+    now = datetime.datetime.now(JST)
+    path = snapshot_dir / now.strftime("%Y%m%d") / f"{now:%H%M%S}.{now.microsecond // 1000:03}_{name}.gz"
+
+    def write() -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(gzip.compress(body))
+
+    # 保存の失敗で取得を止めない
+    try:
+        await asyncio.to_thread(write)
+    except OSError as e:
+        warnings.warn(f"スナップショットの保存に失敗しました: {e}")
+        return
+    last[name] = body
+
+
 def _parse_delay_minutes(text: str) -> int:
     """
     delayMinutes（"3分遅れ"、"2時間以上"、""）を分に直す。
@@ -79,11 +102,73 @@ def _parse_delay_minutes(text: str) -> int:
     return 0
 
 
+def _deprecated(old: str, new: str) -> None:
+    """v3 で削除・改名する名前を使ったときの警告。new に書き換え先を書く"""
+    warnings.warn(f"{old} は v3 で削除します。{new}", DeprecationWarning, stacklevel=3)
+
+
 class DiaNotFoundError(ValueError):
     """
     列車のダイヤ（startTimeList）が無いため、ダイヤから求める情報が分からないことを表す例外。
     運休・運転整理などで、位置情報にはあるがダイヤには無い列車が走ることがある。
     """
+
+
+def _line_order(line: LineLiteral, direction: Literal["up","down"]) -> list[int]:
+    """路線の駅番号を、その方向に走る順に返す"""
+    match line:
+        case "中之島線":
+            order = stations_map.NAKANOSHIMA_UP
+        case "交野線":
+            order = stations_map.KATANO_UP
+        case "京阪本線・鴨東線":
+            order = stations_map.HONNSEN_UP
+        case "宇治線":
+            order = stations_map.UJI_UP
+        case _:
+            raise ValueError()
+    return order if direction == "up" else list(reversed(order))
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class TrainPosition:
+    """
+    座標から分かる、線路上の位置。停車するかどうかはダイヤによるため、ここには含まない。
+    - station: 駅の位置座標にいるならその駅（停車中・通過中）。駅間なら None
+    - behind: 駅間なら後ろの駅。駅にいるなら None
+    - ahead: 進行方向の次の駅。路線の端の駅にいるなら None
+    - line: 走っている路線
+    """
+    station: Optional["StationData"]
+    behind:  Optional["StationData"]
+    ahead:   Optional["StationData"]
+    line:    LineLiteral
+
+
+def _calc_train_position(master: "KHTracker", col: int, row: int, direction: Literal["up","down"]) -> TrainPosition:
+    line, st1, st2 = calc_position(col, row)
+    if not st2:
+        order = _line_order(line, direction)
+        index = order.index(st1) if st1 in order else None
+        ahead = order[index + 1] if index is not None and index + 1 < len(order) else None
+        return TrainPosition(
+            station = master.stations[st1],
+            behind = None,
+            ahead = master.stations.get(ahead) if ahead is not None else None,
+            line = line,
+        )
+    # 京阪本線のみ、番号が大きい方が上り。そのほかでは小さい方が上り
+    small, large = sorted((st1, st2))
+    if (direction == "up") == (line == "京阪本線・鴨東線"):
+        behind, ahead = small, large
+    else:
+        behind, ahead = large, small
+    return TrainPosition(
+        station = None,
+        behind = master.stations[behind],
+        ahead = master.stations[ahead],
+        line = line,
+    )
 
 class StationData(BaseModel):
     """
@@ -99,9 +184,9 @@ class StationData(BaseModel):
     def arriving_trains(self):
         """
         この駅に 次に停車する予定 or 停車中 の列車リストを返す。
-        KHTracker.trains から該当駅が next_stop_station になっている列車を抽出する。
+        KHTracker.trains から該当駅が current_or_next_stop になっている列車を抽出する。
         """
-        return [train for train in self.master.active_trains.values() if train.next_stop_station == self]
+        return [train for train in self.master.active_trains.values() if train.current_or_next_stop == self]
 
     @property
     def trains(self) -> list[tuple["TrainData","StopStationData"]]:
@@ -123,21 +208,22 @@ class StationData(BaseModel):
     def upcoming_trains(self) -> list[tuple["TrainData|ActiveTrainData","StopStationData"]]:
         """
         この駅に 今後停車する or 停車中 のすべての列車を返す。
-        走行中の列車は、停車駅の並び（走行順）で next_stop_station 以降にこの駅があるかで判定する。
+        走行中の列車は、停車駅の並び（走行順）で current_or_next_stop 以降にこの駅があるかで判定する。
         """
         trains:list[tuple[(TrainData|ActiveTrainData), StopStationData]] = []
 
         # 全ての列車から
         for train, stop in self.trains:
             if isinstance(train, ActiveTrainData):
-                # next_stop_stationが不明ならスキップ
-                if not train.next_stop_station:
+                # current_or_next_stopが不明ならスキップ
+                current_or_next_stop = train.current_or_next_stop
+                if not current_or_next_stop:
                     continue
 
                 # この駅が、次に停車する駅と同じか、それより後に停車する駅なら
                 # （時刻不明の停車駅でも判定できるよう、時刻ではなく並び順で比較する）
                 stop_stations = [s.station for s in train.stop_stations]
-                if stop_stations.index(self) >= stop_stations.index(train.next_stop_station):
+                if stop_stations.index(self) >= stop_stations.index(current_or_next_stop):
                     trains.append((train,stop))
             elif train._may_stop_after_observation_began(stop):
                 trains.append((train,stop))
@@ -145,6 +231,29 @@ class StationData(BaseModel):
         # 時刻不明の停車は後ろに回す
         trains.sort(key=lambda x:x[1].time or datetime.datetime.max.replace(tzinfo=JST))
         return trains
+
+    @property
+    def fastest_arrivals(self) -> dict["StationData", tuple["TrainData|ActiveTrainData", datetime.datetime]]:
+        """
+        この駅から乗れる列車（upcoming_trains）で、この先の各駅に最も早く着く列車とその到着時刻。{駅: (列車, 到着時刻)}
+        「〇〇には先着」の表示に使う。
+        - 乗り換えは考えない（その列車に乗ったまま着く時刻で比べる）
+        - 到着時刻はダイヤの予定時刻で、遅延を足さない
+        - 時刻不明の停車駅は使わない。到着時刻が同じなら、この駅を先に出る列車にする
+        - この駅自身は含まない
+        """
+        fastest: dict[StationData, tuple[TrainData|ActiveTrainData, datetime.datetime]] = {}
+        # upcoming_trains はこの駅の時刻順なので、到着時刻が同じなら先に出る列車が残る
+        for train, stop in self.upcoming_trains:
+            stops = train.stop_stations
+            index = next(i for i, s in enumerate(stops) if s is stop)
+            for later in stops[index + 1:]:
+                if later.time is None or later.station == self:
+                    continue
+                best = fastest.get(later.station)
+                if best is None or later.time < best[1]:
+                    fastest[later.station] = (train, later.time)
+        return fastest
 
     def __str__(self):
         return self.station_name.ja
@@ -183,19 +292,22 @@ class TrainHistoryRecord:
         return line
 
     @property
+    def position(self) -> TrainPosition:
+        """その時点の線路上の位置"""
+        return _calc_train_position(self.master, self.location_col, self.location_row, self.direction)
+
+    @property
     def stopping_station(self) -> Optional[StationData]:
-        _, st1, st2 = calc_position(self.location_col, self.location_row)
-        if st2:
-            return None
-        else:
-            return self.master.stations[st1]
+        """【非推奨】position.station を使ってください。"""
+        _deprecated("TrainHistoryRecord.stopping_station", "position.station を使ってください。")
+        return self.position.station
 
     @property
     def is_at_station(self) -> bool:
-        """その時点で駅の位置座標にいたか"""
-        _, _, st2 = calc_position(self.location_col, self.location_row)
-        return not st2
-    
+        """【非推奨】その時点で駅の位置座標にいたか。position.station is not None を使ってください。"""
+        _deprecated("TrainHistoryRecord.is_at_station", "position.station is not None を使ってください。")
+        return self.position.station is not None
+
     # masterの型を許可する
     model_config = {"arbitrary_types_allowed": True}
 
@@ -221,7 +333,8 @@ class TrainData(BaseModel):
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
     """
     master:     "KHTracker"
-    wdfBlockNo:int
+    # WDF番号（その日の列車を区別する番号）。v2.8 までの wdfBlockNo= でも作れる
+    wdf:int = Field(validation_alias=AliasChoices("wdf", "wdfBlockNo"))
     date:datetime.date
     has_premiumcar: Optional[bool]
     train_formation: Optional[int]
@@ -239,6 +352,12 @@ class TrainData(BaseModel):
     def has_dia(self) -> bool:
         """ダイヤ（停車駅・時刻）があるか。運休・運転整理などで、ダイヤに無い列車が走ることがある。"""
         return len(self.route_stations) > 0
+
+    @property
+    def wdfBlockNo(self) -> int:
+        """【非推奨】wdf を使ってください。"""
+        _deprecated("wdfBlockNo", "wdf を使ってください。")
+        return self.wdf
 
     @property
     def line(self) -> LineLiteral:
@@ -266,7 +385,7 @@ class TrainData(BaseModel):
         # ダイヤがなく、行先もない列車は存在しない
         # 一度でもpositionに登場したならactual_directionには値が入る。ダイヤに登場したならdestinationにも値が入る
         if self.destination is None:
-            raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] 行先が分からないため、方向を推定できません。")
+            raise DiaNotFoundError(f"[WDF{self.wdf}] 行先が分からないため、方向を推定できません。")
 
         if self.line == "交野線":
             # 私市行きなら下り
@@ -303,7 +422,7 @@ class TrainData(BaseModel):
         if self.actual_train_type is not None:
             return self.actual_train_type
         if not self.has_dia or self.destination is None:
-            raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] ダイヤに無い列車のため、種別を推定できません。")
+            raise DiaNotFoundError(f"[WDF{self.wdf}] ダイヤに無い列車のため、種別を推定できません。")
 
         stop_stations_list = [stop.station for stop in self.stop_stations]
 
@@ -409,10 +528,10 @@ class TrainData(BaseModel):
     @property
     def start_station(self) -> StationData:
         if not self.has_dia:
-            raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] ダイヤに無い列車のため、始発駅が分かりません。")
+            raise DiaNotFoundError(f"[WDF{self.wdf}] ダイヤに無い列車のため、始発駅が分かりません。")
         start_stations = [station for station in self.route_stations if station.is_start]
         if len(start_stations) != 1:
-            raise ValueError(f"[WDF{self.wdfBlockNo}] 始発駅が{len(start_stations)}個登録されています。これはバグです。\n({start_stations})")
+            raise ValueError(f"[WDF{self.wdf}] 始発駅が{len(start_stations)}個登録されています。これはバグです。\n({start_stations})")
         station = start_stations[0].station
         return station
 
@@ -422,10 +541,10 @@ class TrainData(BaseModel):
         if self.actual_destination is not None:
             return self.actual_destination
         if not self.has_dia:
-            raise DiaNotFoundError(f"[WDF{self.wdfBlockNo}] ダイヤに無い列車のため、行先が分かりません。")
+            raise DiaNotFoundError(f"[WDF{self.wdf}] ダイヤに無い列車のため、行先が分かりません。")
         stop_stationdata = [station for station in self.route_stations if station.is_final]
         if len(stop_stationdata) != 1:
-            raise ValueError(f"[WDF{self.wdfBlockNo}] 終着駅が{len(stop_stationdata)}個登録されています。これはバグです。\n({stop_stationdata})")
+            raise ValueError(f"[WDF{self.wdf}] 終着駅が{len(stop_stationdata)}個登録されています。これはバグです。\n({stop_stationdata})")
         station = stop_stationdata[0].station
         return station
     
@@ -542,32 +661,75 @@ class ActiveTrainData(TrainData):
         return self.active_direction
 
     @property
-    def is_stopping(self) -> Optional[bool]:
-        """列車が駅に停車中かどうか"""
-        next_stop = self.next_stop_station
-        if next_stop is None:
+    def position(self) -> TrainPosition:
+        """座標から分かる線路上の位置（駅・後ろの駅・進行方向の次の駅・路線）"""
+        return _calc_train_position(self.master, self.location_col, self.location_row, self.direction)
+
+    def _stops_from(self, station: Optional[StationData]) -> Optional[StationData]:
+        """station から進行方向へたどり、最初に停車する駅を返す（station 自身を含む）"""
+        if station is None:
             return None
-        _, st1, st2 = calc_position(self.location_col, self.location_row)
-        # st2がなければ停車中
-        return st2 is None and st1 == next_stop.station_number
+        stop_stations = [stop.station.station_number for stop in self.stop_stations]
+        line = _line_order(self.line, self.direction)
+        if station.station_number not in line:
+            raise IndexError(f"{station} is not in {self.line}")
+        for number in line[line.index(station.station_number):]:
+            if number in stop_stations:
+                return self.master.stations[number]
+        # 不明な場合
+        return None
+
+    @property
+    def current_or_next_stop(self) -> Optional[StationData]:
+        """停車中ならその駅、でなければ次に停車する駅（発車標用）。分からなければ None"""
+        position = self.position
+        return self._stops_from(position.station or position.ahead)
+
+    @property
+    def stopped_at(self) -> Optional[StationData]:
+        """停車中の駅。停車中でなければ（通過中・駅間なら） None"""
+        station = self.position.station
+        if station is not None and self.current_or_next_stop == station:
+            return station
+        return None
+
+    @property
+    def next_stop(self) -> Optional[StationData]:
+        """この先で次に停車する駅。停車中の駅は含まない。終点にいるときなど、分からなければ None"""
+        position = self.position
+        if self.stopped_at is not None:
+            return self._stops_from(position.ahead)
+        return self._stops_from(position.station or position.ahead)
+
+    @property
+    def is_stopping(self) -> Optional[bool]:
+        """【非推奨】列車が駅に停車中かどうか。stopped_at is not None を使ってください。"""
+        _deprecated("is_stopping", "stopped_at is not None を使ってください。")
+        return self._is_stopping()
+
+    def _is_stopping(self) -> Optional[bool]:
+        # v2 の is_stopping と同じく、停車駅が分からなければ None
+        if self.current_or_next_stop is None:
+            return None
+        return self.stopped_at is not None
 
     @property
     def is_at_station(self) -> bool:
-        """列車が駅の位置座標にあるか"""
-        _, _, st2 = calc_position(self.location_col, self.location_row)
-        return True if not st2 else False
-    
+        """【非推奨】列車が駅の位置座標にあるか。position.station is not None を使ってください。"""
+        _deprecated("is_at_station", "position.station is not None を使ってください。")
+        return self.position.station is not None
+
     @property
     def is_at_start_station(self) -> Optional[bool]:
         """始発駅に停車中かどうか"""
-        is_stopping = self.is_stopping
+        is_stopping = self._is_stopping()
         if is_stopping is None:
             return None
 
         if is_stopping is False:
             return False
-        
-        return self.next_stop_station == self.start_station
+
+        return self.stopped_at == self.start_station
 
     @property
     def estimated_delay_minutes(self) -> int:
@@ -577,15 +739,17 @@ class ActiveTrainData(TrainData):
         """
         # 120分以内なら公式の値を用いる
         official_delay_minutes = self.delay_minutes
-        if official_delay_minutes < 120 or self.next_stop_station is None:
+        current_or_next_stop = self.current_or_next_stop
+        if official_delay_minutes < 120 or current_or_next_stop is None:
             return official_delay_minutes
 
         min_delay:list[int] = []
         min_delay.append(official_delay_minutes)
 
+        stopped_at = self.stopped_at
         # 停車中なら：その駅の実際の到着時刻と定刻の到着時刻の差を算出（最低遅延分数）
-        if self.is_stopping is True:
-            scheduled_time = self.get_stop_time(self.next_station)
+        if stopped_at is not None:
+            scheduled_time = self.get_stop_time(stopped_at)
 
             # その駅にいつから止まっているか
             actual_arrived_time:Optional[datetime.datetime] = None
@@ -604,12 +768,11 @@ class ActiveTrainData(TrainData):
                 min_delay.append(int((actual_arrived_time - scheduled_time).total_seconds() // 60))
 
         # 次の駅の定刻停車時刻と現在の時刻の差（最低遅延分数）
-        if self.is_stopping is False:
-            next_stop_scheduled_time = [i for i in self.route_stations if i.station == self.next_stop_station][0].time
-            
+        if stopped_at is None:
+            next_stop_scheduled_time = [i for i in self.route_stations if i.station == current_or_next_stop][0].time
+
         else:
-            current_station = self.next_station
-            current_stopstationdata = [i for i in self.stop_stations if i.station == current_station][0]
+            current_stopstationdata = [i for i in self.stop_stations if i.station == stopped_at][0]
             next_stop_scheduled_time = None
             if len(self.stop_stations)-1 >= self.stop_stations.index(current_stopstationdata)+1:
                 next_stop_scheduled_time = self.stop_stations[self.stop_stations.index(current_stopstationdata)+1].time
@@ -667,70 +830,24 @@ class ActiveTrainData(TrainData):
 
     @property
     def next_station(self) -> StationData:
-        """停車中の駅、もしくは次に停車（通過）する駅を返します。次の停車駅を取得したい場合は代わりにnext_stop_stationを使用してください。"""
-        _, st1, st2 = calc_position(self.location_col, self.location_row)
-        if not st2:
-            return self.master.stations[st1]
-        else:
-            sts = sorted((st1,st2))
-            # 京阪本線のみ、番号が大きい方が上り
-            # そのほかでは小さい方が上り
-            if self.direction == "up":
-                if self.line == "京阪本線・鴨東線":
-                    return self.master.stations[sts[1]] # 大きい方
-                else:
-                    return self.master.stations[sts[0]] # 小さい方
-
-            else:
-                if self.line == "京阪本線・鴨東線":
-                    return self.master.stations[sts[0]]
-                else:
-                    return self.master.stations[sts[1]]
+        """【非推奨】停車中の駅、もしくは次に停車（通過）する駅。駅にいるなら position.station、駅間なら position.ahead を使ってください。"""
+        _deprecated("next_station", "駅にいるなら position.station、駅間なら position.ahead を使ってください。")
+        position = self.position
+        assert position.station or position.ahead
+        return position.station or position.ahead
 
     @property
     def next_stop_station(self) -> Optional[StationData]:
-        """停車中の駅、もしくは次に停車する駅を返します。"""
-        next_station = self.next_station.station_number
-        stop_stations = [station.station.station_number for station in self.stop_stations]
-
-        match self.line:
-            case "中之島線":
-                line = stations_map.NAKANOSHIMA_UP
-            case "交野線":
-                line = stations_map.KATANO_UP
-            case "京阪本線・鴨東線":
-                line = stations_map.HONNSEN_UP
-            case "宇治線":
-                line = stations_map.UJI_UP
-            case _:
-                raise ValueError()
-        if self.direction == "down":
-            line = list(reversed(line))
-
-        if not next_station in line:
-            raise IndexError(f"{self.next_station} is not in {self.line}")
-        
-        # next_stationが停車駅なら
-        if next_station in stop_stations:
-            return self.master.stations[next_station]
-        else:
-            index = line.index(next_station)
-            for i in range(100):
-                if index + i >= len(line): # 範囲チェックを追加
-                    break
-                if line[index+i] in stop_stations:
-                    return self.master.stations[line[index+i]]
-                else:
-                    continue
-            # 不明な場合
-            return None
+        """【非推奨】停車中の駅、もしくは次に停車する駅。current_or_next_stop を使ってください。"""
+        _deprecated("next_stop_station", "同じ値の current_or_next_stop を使ってください。")
+        return self.current_or_next_stop
 
     # 整形して文字列化
     def __str__(self) -> str:
         text = f'【{"上り線" if self.direction == "up" else "下り線"}】 {"臨時" if self.is_special else ""}{self.train_type.value} {self.train_number}号: {self.destination or "不明"}行き {self.train_formation}編成/{self.cars}両 '
         text += f'(col, row: {self.location_col}, {self.location_row})\n'\
         f'{"プレミアムカー付き /" if self.has_premiumcar else ""}遅延：{self.delay_minutes} 分\n'
-        text += f'次の停車駅は【{self.next_stop_station or "不明"}駅】\n\n' if not self.is_stopping else f"【{self.next_station}駅】に停車中\n\n"
+        text += f'次の停車駅は【{self.current_or_next_stop or "不明"}駅】\n\n' if not self.stopped_at else f"【{self.stopped_at}駅】に停車中\n\n"
 
         header = ["到着時刻","停車駅","ホーム番線"]
         body:list[list[str]] = []
@@ -747,7 +864,7 @@ class ActiveTrainData(TrainData):
         """非アクティブ化する際に実行。遅延・位置等のリアルタイム情報は削除される。"""
         train = TrainData(
             master=self.master,
-            wdfBlockNo=self.wdfBlockNo,
+            wdf=self.wdf,
             actual_train_type=self.train_type,
             actual_direction=self.direction,
             actual_destination=self.destination,
@@ -797,7 +914,7 @@ class KHTracker:
         self.snapshot_dir: Optional[Path] = Path(snapshot_dir) if snapshot_dir is not None else None
         self._last_snapshot: dict[str, bytes] = {}                       # ファイル名:前回保存した内容
         self._etags: dict[str, str] = {}                                 # URL:前回受け取ったETag
-        # wdfBlockNo:TrainData
+        # WDF番号:TrainData
         ## 現在アクティブな列車リスト
         self.trains:dict[int, TrainData|ActiveTrainData] = {}
         ## 駅リスト
@@ -815,7 +932,7 @@ class KHTracker:
         d:dict[int, ActiveTrainData] = {}
         for train in self.trains.values():
             if isinstance(train, ActiveTrainData):
-                d[train.wdfBlockNo] = train
+                d[train.wdf] = train
         return d
 
     def find_trains(
@@ -832,6 +949,7 @@ class KHTracker:
             max_delay:      Optional[int] = None,
             is_stopping:    Optional[bool] = None,
             line:           Optional[LineLiteral] = None,
+            current_or_next_stop: Optional[StationData] = None,
             ) -> Sequence[TrainData]:
         """
         条件に合致する列車を検索してリストで返します。
@@ -842,11 +960,16 @@ class KHTracker:
         - train_number: 列車番号（例: "2201"）
         - has_premiumcar: プレミアムカー付きかどうか
         - destination: 行き先駅
-        - next_stop_station: 次の停車駅 or 停車中の駅
+        - current_or_next_stop: 停車中の駅 or 次の停車駅
+        - next_stop_station: 【非推奨】current_or_next_stop と同じ
         - line: 路線。走行中の列車は今いる路線、走行中でない列車は TrainData.line（走ったことがあればそのときの路線、なければ停車駅から推定した路線）
-        is_special・train_number・next_stop_station・is_stopping は走行中の列車だけが持つ値のため、
+        is_special・train_number・current_or_next_stop・is_stopping は走行中の列車だけが持つ値のため、
         指定すると走行中でない列車は当てはまりません。
         """
+        if next_stop_station is not None:
+            _deprecated("find_trains の next_stop_station", "同じ意味の current_or_next_stop を使ってください。")
+            if current_or_next_stop is None:
+                current_or_next_stop = next_stop_station
         trains: list[TrainData|ActiveTrainData] = []
         for train in self.trains.values():
             # 条件に合致するかチェック
@@ -868,18 +991,18 @@ class KHTracker:
                 continue
 
             # 以下は走行中の列車だけが持つ値。指定されたら、走行中でない列車は当てはまらない
-            active_only = (next_stop_station, is_special, train_number, is_stopping)
+            active_only = (current_or_next_stop, is_special, train_number, is_stopping)
             if not isinstance(train, ActiveTrainData):
                 if any(v is not None for v in active_only):
                     continue
             else:
-                if next_stop_station is not None and train.next_stop_station != next_stop_station:
+                if current_or_next_stop is not None and train.current_or_next_stop != current_or_next_stop:
                     continue
                 if is_special is not None and train.is_special != is_special:
                     continue
                 if train_number is not None and train.train_number != train_number:
                     continue
-                if is_stopping is not None and train.is_stopping != is_stopping:
+                if is_stopping is not None and train._is_stopping() != is_stopping:
                     continue
             
             trains.append(train)
@@ -929,23 +1052,8 @@ class KHTracker:
 
     async def _save_snapshot(self, name: str, body: bytes) -> None:
         """前回から内容が変わっていれば snapshot_dir/YYYYMMDD/HHMMSS.mmm_name.gz に保存する。"""
-        if self._last_snapshot.get(name) == body:
-            return
         assert self.snapshot_dir is not None
-        now = datetime.datetime.now(JST)
-        path = self.snapshot_dir / now.strftime("%Y%m%d") / f"{now:%H%M%S}.{now.microsecond // 1000:03}_{name}.gz"
-
-        def write() -> None:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(gzip.compress(body))
-
-        # 保存の失敗で列車情報の取得を止めない
-        try:
-            await asyncio.to_thread(write)
-        except OSError as e:
-            warnings.warn(f"スナップショットの保存に失敗しました: {e}")
-            return
-        self._last_snapshot[name] = body
+        await write_snapshot(self.snapshot_dir, name, body, self._last_snapshot)
 
     #動的データを更新
     async def fetch_pos(self):
@@ -1033,7 +1141,7 @@ class KHTracker:
                     new_active_train = ActiveTrainData(
                         master=self, 
                         history = old.history if old else [],
-                        wdfBlockNo=wdf,
+                        wdf=wdf,
                         date=self.date,
                         train_number = train.trainNumber,
                         destination = self.stations.get(train.destStationNumber),
@@ -1080,7 +1188,8 @@ class KHTracker:
 
                     # 方向を更新（出現直後の1分だけ誤った値になることがある）
                     # ただし終点に停車中は次の運行の向きに変わるため、そのままにする
-                    at_terminal = active_train.is_at_station and active_train.next_station == active_train.destination
+                    station = active_train.position.station
+                    at_terminal = station is not None and station == active_train.destination
                     if not at_terminal:
                         active_train.active_direction = "up" if trainlist.trainDirection == 0 else "down"
 
@@ -1104,11 +1213,11 @@ class KHTracker:
                 or self.last_regist_dia_date != self.date
             )
             if need_download:
-                await self.regist_dia(True)
+                await self._regist_dia(True)
             else:
-                await self.regist_dia(False)
+                await self._regist_dia(False)
         else:
-            await self.regist_dia(True)
+            await self._regist_dia(True)
         if self.dia_confirmed_date != self.date and self._dia_matches_positions():
             self.dia_confirmed_date = self.date
 
@@ -1128,7 +1237,11 @@ class KHTracker:
         return True if checked else None
 
     async def regist_dia(self, download:bool):
-        "ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
+        "【非推奨】ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
+        _deprecated("regist_dia", "ダイヤは fetch_pos が必要なときに取得するため、呼ばなくてかまいません。")
+        return await self._regist_dia(download)
+
+    async def _regist_dia(self, download:bool):
         starttime_list = self.starttime_list
         if download or starttime_list is None:
             url = "https://www.keihan.co.jp/zaisen-up/startTimeList.json"
@@ -1162,7 +1275,7 @@ class KHTracker:
             if not wdf in self.trains:
                 self.trains[wdf] = TrainData(
                     master=self,
-                    wdfBlockNo=wdf,
+                    wdf=wdf,
                     has_premiumcar=bool(train.premiumCar),
                     train_formation=int(train.trainCar),
                     date=self.date
@@ -1229,7 +1342,8 @@ class KHTracker:
         return self
 
     async def fetch_filelist(self):
-        """【未実装】FileList.xmlを取得する。"""
+        """【非推奨・未実装】FileList.xmlを取得する。"""
+        _deprecated("fetch_filelist", "代わりの機能はありません。")
         text = await self._get("https://www.keihan.co.jp/tinfo/05-flist/FileList.xml")
         root = ET.fromstring(text)
 

@@ -58,8 +58,9 @@ def test_direction_glitch_corrected(api, fresh_tracker):
         assert train.train_number == "1001"
         assert train.destination.station_name.ja == "中之島"
         assert train.direction == direction, n
-        assert train.is_stopping is stopping, n
-        assert train.next_station.station_name.ja == next_station, n
+        assert (train.stopped_at is not None) is stopping, n
+        position = train.position
+        assert (position.station or position.ahead).station_name.ja == next_station, n
 
 
 def test_departure_from_kyobashi(api, fresh_tracker):
@@ -70,11 +71,11 @@ def test_departure_from_kyobashi(api, fresh_tracker):
         train = fresh_tracker.trains[364]
         assert isinstance(train, ActiveTrainData)
         assert train.location_row == row
-        assert train.is_at_station is at_station
-        assert train.history[-1].is_at_station is at_station
+        assert (train.position.station is not None) is at_station
+        assert (train.history[-1].position.station is not None) is at_station
         if not at_station:
-            assert train.is_stopping is False
-            assert train.next_station.station_number == 3  # 天満橋
+            assert train.stopped_at is None
+            assert train.position.ahead.station_number == 3  # 天満橋
 
 
 # ---------------------------------------------------------------- 行先なし(00)
@@ -228,9 +229,10 @@ def test_train_to_neyagawa_depot(api, fresh_tracker):
     assert train.destination.station_number == 17
     assert train.stop_stations[-1].station.station_number == 17
     assert train.direction == "down"
-    assert not train.is_stopping
-    assert train.next_station.station_number == 16  # 萱島方向
-    assert train.next_stop_station is None
+    assert train.stopped_at is None
+    assert train.position.ahead.station_number == 16  # 萱島方向
+    assert train.current_or_next_stop is None
+    assert train.next_stop is None
     assert "不明駅" in str(train)
     # 萱島には停車しないので、萱島の接近列車には出ない
     assert all(t is not train for t, _ in fresh_tracker.stations[16].upcoming_trains)

@@ -46,6 +46,10 @@ class BusState(BaseModel):
     html_sp: Optional[str] = None
     busstateprms: BusStatePrms
     dgmpl: Optional[str] = None  # この便の発着時刻表を fetch_diagram で取得するための値
+    # 以下は html の見出し（「定刻： 21:11 (約1分遅れ)」）から読む値
+    scheduled_time: Optional[str] = None   # 定刻（HH:MM）
+    delay_text: Optional[str] = None       # 「定時運行中」「約1分遅れ」「到着済」など。未受信なら None
+    delay_minutes: Optional[int] = None    # 遅れ（分）。定時運行中なら0。未受信・到着済なら None
 
     @model_validator(mode="before")
     def parse_prms(cls, values):

@@ -100,13 +100,13 @@ def test_all_trains_have_one_start_and_destination(tracker):
     for train in tracker.trains.values():
         assert train.start_station is not None
         assert train.destination is not None
-        assert train.start_station != train.destination, train.wdfBlockNo
+        assert train.start_station != train.destination, train.wdf
 
 
 def test_stop_stations_sorted_by_time(tracker):
     for train in tracker.trains.values():
         times = [s.time for s in train.stop_stations if s.time is not None]
-        assert times == sorted(times), train.wdfBlockNo
+        assert times == sorted(times), train.wdf
 
 
 def test_active_trains_match_fixture(tracker):
@@ -119,11 +119,11 @@ def test_active_trains_match_fixture(tracker):
         assert train.destination is tracker.stations[int(info["destStationNumber"])]
 
 
-def test_active_trains_next_stop_station(tracker):
+def test_active_trains_current_or_next_stop(tracker):
     for train in tracker.active_trains.values():
-        next_stop = train.next_stop_station
-        assert next_stop is not None, train.wdfBlockNo
-        assert next_stop in [s.station for s in train.stop_stations], train.wdfBlockNo
+        next_stop = train.current_or_next_stop
+        assert next_stop is not None, train.wdf
+        assert next_stop in [s.station for s in train.stop_stations], train.wdf
 
 
 def test_inferred_train_type_matches_actual(tracker):
@@ -131,14 +131,14 @@ def test_inferred_train_type_matches_actual(tracker):
     for train in tracker.active_trains.values():
         inferred = TrainData(
             master=tracker,
-            wdfBlockNo=train.wdfBlockNo,
+            wdf=train.wdf,
             date=train.date,
             has_premiumcar=None,
             train_formation=None,
             route_stations=train.route_stations,
         ).train_type
         expected = TrainType.LTD_EXP if train.train_type == TrainType.LINER else train.train_type
-        assert inferred == expected, f"{train.train_number}号 (wdf {train.wdfBlockNo})"
+        assert inferred == expected, f"{train.train_number}号 (wdf {train.wdf})"
 
 
 def test_inferred_direction_matches_actual(saved_tracker):
@@ -148,13 +148,13 @@ def test_inferred_direction_matches_actual(saved_tracker):
             continue  # 運転整理でダイヤに無い列車は、公式の方向のみ取得できる。
         inferred = TrainData(
             master=saved_tracker,
-            wdfBlockNo=train.wdfBlockNo,
+            wdf=train.wdf,
             date=train.date,
             has_premiumcar=None,
             train_formation=None,
             route_stations=train.route_stations,
         ).direction
-        assert inferred == train.direction, f"{train.train_number}号 (wdf {train.wdfBlockNo})"
+        assert inferred == train.direction, f"{train.train_number}号 (wdf {train.wdf})"
 
 
 @pytest.mark.parametrize(
@@ -174,7 +174,7 @@ def test_direction_matches_terminal_destination(saved_tracker, destination_numbe
     assert trains, f"fixtureにKH{destination_number:02d}行きの列車がありません"
     for train in trains:
         assert train.direction == expected_direction, (
-            f"wdf {train.wdfBlockNo}: {train.destination.station_name.ja}行き "
+            f"wdf {train.wdf}: {train.destination.station_name.ja}行き "
             f"direction={train.direction} (expected {expected_direction})"
         )
 
@@ -221,12 +221,12 @@ def test_find_trains_line(tracker, line):
 
 def test_find_trains_active_only_conditions_exclude_others(tracker):
     """走行中の列車だけが持つ値を指定したら、走行中でない列車は当てはまらない"""
-    train = next(t for t in tracker.active_trains.values() if t.is_stopping is not None)
+    train = next(t for t in tracker.active_trains.values() if t.current_or_next_stop is not None)
     for found in [
         tracker.find_trains(train_number=train.train_number),
         tracker.find_trains(is_special=train.is_special),
-        tracker.find_trains(next_stop_station=train.next_stop_station),
-        tracker.find_trains(is_stopping=train.is_stopping),
+        tracker.find_trains(current_or_next_stop=train.current_or_next_stop),
+        tracker.find_trains(is_stopping=train.stopped_at is not None),
     ]:
         assert train in found
         assert all(isinstance(t, ActiveTrainData) for t in found)
@@ -391,7 +391,7 @@ def test_active_train_updated(api, fresh_tracker, delay_text, delay_minutes):
         loc for loc in data["locationObjects"]
         if loc["trainInfoObjects"][0]["wdfBlockNo"] == "1096"  # 上り特急、石清水八幡宮→中書島 走行中
     )
-    assert not fresh_tracker.trains[1096].is_stopping
+    assert fresh_tracker.trains[1096].stopped_at is None
     target["locationRow"] = str(int(target["locationRow"]) + 1)
     info = target["trainInfoObjects"][0]
     info["delayMinutes"] = delay_text
@@ -425,7 +425,7 @@ def test_staying_time(api, fresh_tracker):
     run(fresh_tracker.fetch_pos())
     train = fresh_tracker.trains[1096]
     assert isinstance(train, ActiveTrainData)
-    assert not train.is_at_station
+    assert train.position.station is None
     # 出現した時点では、それより前の時間は分からないので0
     assert train.staying_time == datetime.timedelta(0)
 
@@ -471,7 +471,7 @@ def test_history_recorded(api, fresh_tracker):
     assert first.direction == train.direction
     assert first.destination == train.destination
     assert first.line == train.line
-    assert first.is_at_station == train.is_at_station
+    assert first.position == train.position
 
     # 同じ位置情報を取り直しても増えない
     run(fresh_tracker.fetch_pos())
@@ -596,17 +596,17 @@ def test_direction_corrected_on_next_fetch(api, fresh_tracker):
 def test_direction_kept_while_stopping_at_terminal(api, fresh_tracker):
     # 終点に停車中は公式の方向が次の運行の向きに変わるが、追従しない
     run(fresh_tracker.fetch_pos())
-    train = next(t for t in fresh_tracker.active_trains.values() if t.is_stopping)
-    wdf, direction = train.wdfBlockNo, train.direction
+    train = next(t for t in fresh_tracker.active_trains.values() if t.stopped_at)
+    wdf, direction = train.wdf, train.direction
 
     data = copy.deepcopy(load_fixture("trainPositionList.json"))
     loc = _flip_direction(data, str(wdf))
-    loc["trainInfoObjects"][0]["destStationNumber"] = str(train.next_station.station_number)
+    loc["trainInfoObjects"][0]["destStationNumber"] = str(train.stopped_at.station_number)
     api.set_json(POSITION_PATH, data)
     run(fresh_tracker.fetch_pos())
 
     train = fresh_tracker.trains[wdf]
-    assert train.destination == train.next_station
+    assert train.destination == train.position.station
     assert train.direction == direction
 
 
@@ -771,7 +771,7 @@ def test_upcoming_trains_with_unknown_time(api, fresh_tracker):
     run(fresh_tracker.fetch_pos())
 
     train = fresh_tracker.trains[1096]
-    assert train.next_stop_station.station_number == 28
+    assert train.current_or_next_stop.station_number == 28
     assert [s.station.station_number for s in train.stop_stations][-4:] == [30, 37, 39, 40]
     assert train.destination.station_number == 40
 
@@ -808,10 +808,10 @@ def test_active_train_without_dia(no_dia_tracker):
         train.start_station
     assert issubclass(DiaNotFoundError, ValueError)
     assert train.stop_stations == []
-    assert train.next_stop_station is None
+    assert train.current_or_next_stop is None
     # 駅の位置にはいるが、停車か通過かはダイヤが無いと分からない
-    assert train.is_at_station
-    assert train.is_stopping is None
+    assert train.position.station is not None
+    assert train.stopped_at is None
     assert train.is_at_start_station is None
 
     # 位置情報から分かる情報は使える
@@ -820,7 +820,7 @@ def test_active_train_without_dia(no_dia_tracker):
     assert train.direction == "down"
     assert train.line == "宇治線"
     assert not train.is_special
-    assert train.next_station is tracker.stations[71]
+    assert train.position.station is tracker.stations[71]
     str(train)
 
     # 駅から列車を探しても落ちない（ダイヤに無い列車は出てこない）
@@ -856,3 +856,48 @@ def test_train_data_without_dia_or_actual_data(tracker):
     for name in ["train_type", "direction", "destination", "start_station"]:
         with pytest.raises(DiaNotFoundError):
             getattr(train, name)
+
+
+# ---------------------------------------------------------------- fastest_arrivals
+
+@pytest.mark.parametrize("number", [1, 18, 21, 28, 42, 54, 67, 77])
+def test_fastest_arrivals_matches_all_upcoming_trains(tracker, number):
+    """upcoming_trains の全列車について、各駅への到着を総当たりで比べたものと一致する"""
+    station = tracker.stations[number]
+    upcoming = station.upcoming_trains
+    expected: dict = {}
+    for train, stop in upcoming:
+        stops = train.stop_stations
+        for later in stops[[i for i, s in enumerate(stops) if s is stop][0] + 1:]:
+            if later.time is not None and later.station != station:
+                expected.setdefault(later.station, []).append(later.time)
+
+    fastest = station.fastest_arrivals
+    assert station not in fastest
+    assert fastest.keys() == expected.keys()
+    for key, (train, time) in fastest.items():
+        assert time == min(expected[key]), key
+        assert (train, train.get_stop_time(key)) in [(t, t.get_stop_time(key)) for t, _ in upcoming]
+        assert train.get_stop_time(key) == time
+
+
+def test_fastest_arrivals_at_korien(tracker):
+    """2026-10-06 21:24 の香里園。夜は準急が中心で、野江に止まる下りは23:31の普通まで無い"""
+    fastest = tracker.stations[18].fastest_arrivals
+    train, time = fastest[tracker.stations[17]]  # 寝屋川市
+    assert (train.wdf, train.train_type, time.strftime("%H:%M")) == (1106, TrainType.SUB_EXP, "21:30")
+    train, time = fastest[tracker.stations[42]]  # 出町柳
+    assert (train.wdf, time.strftime("%H:%M")) == (1159, "22:36")
+    train, time = fastest[tracker.stations[5]]   # 野江
+    assert (train.wdf, train.train_type, time) == (1221, TrainType.LOCAL, datetime.datetime(2026, 10, 7, 0, 5, tzinfo=JST))
+
+
+def test_fastest_arrivals_ties_keep_earlier_departure(api, fresh_tracker):
+    """着く時刻が同じなら、この駅を先に出る列車にする"""
+    run(fresh_tracker.fetch_pos())
+    station = fresh_tracker.stations[18]
+    for key, (train, time) in station.fastest_arrivals.items():
+        departure = train.get_stop_time(station)
+        for other, stop in station.upcoming_trains:
+            if other is not train and other.get_stop_time(key) == time:
+                assert departure is None or (stop.time is not None and departure <= stop.time), key

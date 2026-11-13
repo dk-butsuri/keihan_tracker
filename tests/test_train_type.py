@@ -297,7 +297,7 @@ def test_holiday_patterns_are_known(holiday_tracker):
     for train in holiday_tracker.trains.values():
         pattern = "-".join(str(s.station.station_number) for s in train.stop_stations)
         if pattern not in known:
-            unknown.setdefault(pattern, train.wdfBlockNo)
+            unknown.setdefault(pattern, train.wdf)
     assert not unknown, f"未知の停車パターン {{停車駅: wdfBlockNo}}: {unknown}"
 
 
@@ -324,7 +324,7 @@ def test_all_fixture_patterns_are_known(tracker):
     for train in tracker.trains.values():
         pattern = "-".join(str(s.station.station_number) for s in train.stop_stations)
         if pattern not in known:
-            unknown.setdefault(pattern, train.wdfBlockNo)
+            unknown.setdefault(pattern, train.wdf)
     assert not unknown, f"未知の停車パターン {{停車駅: wdfBlockNo}}: {unknown}"
 
 
@@ -348,7 +348,7 @@ def test_fixture_trains_follow_official_chart(request, tracker_name):
         candidates = official_train_types(stops)
         inferred = TrainData(
             master=tracker,
-            wdfBlockNo=train.wdfBlockNo,
+            wdf=train.wdf,
             date=train.date,
             has_premiumcar=None,
             train_formation=None,
@@ -356,7 +356,7 @@ def test_fixture_trains_follow_official_chart(request, tracker_name):
         ).train_type
         actual = train.train_type if isinstance(train, ActiveTrainData) else None  # APIの種別
         if not candidates or inferred not in candidates or (actual and actual not in candidates):
-            errors.append((train.wdfBlockNo, "-".join(map(str, stops)), inferred.name, actual and actual.name,
+            errors.append((train.wdf, "-".join(map(str, stops)), inferred.name, actual and actual.name,
                            sorted(t.name for t in candidates)))
     assert not errors, "(wdfBlockNo, 停車駅, 推定, 実際, 案内図上の候補): " + repr(errors)
 

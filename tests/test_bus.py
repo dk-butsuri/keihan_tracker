@@ -2,6 +2,7 @@
 京阪バスの接近情報の境界条件。実データの検証は test_bus_diagram.py で行う。
 """
 
+import gzip
 import json
 
 import httpx
@@ -43,6 +44,7 @@ def bus_api(monkeypatch):
         lambda **kwargs: httpx.AsyncClient(transport=httpx.MockTransport(handler), **kwargs),
     )
     monkeypatch.setattr(bus_tracker, "_cache", {})
+    monkeypatch.setattr(bus_tracker, "_last_snapshot", {})
     return state
 
 
@@ -86,3 +88,31 @@ def test_bus_broken_response_raises_keihan_api_error(bus_api, body):
     # 失敗した取得はキャッシュしないので、次の呼び出しで取り直す
     bus_api["body"] = json.dumps(_response([PRMS]), ensure_ascii=False)
     assert run(get_khbus_info("京阪香里園", 1)).body.busstates
+
+
+def test_bus_no_snapshot_by_default(bus_api, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    run(get_khbus_info("京阪香里園", 1))
+    assert list(tmp_path.rglob("*")) == []
+
+
+def test_bus_snapshot_saves_raw_response(bus_api, tmp_path, monkeypatch):
+    run(get_khbus_info("寝屋川市駅［東口］", 2, snapshot_dir=tmp_path))
+    saved = list(tmp_path.rglob("*.gz"))
+    assert [p.name.split("_", 1)[1] for p in saved] == ["busstateupd_寝屋川市駅［東口］_2.json.gz"]
+    assert gzip.decompress(saved[0].read_bytes()).decode("utf-8") == bus_api["body"]
+
+    # 内容が同じなら保存しない。キャッシュを返したときも保存しない
+    monkeypatch.setattr(bus_tracker, "_cache", {})
+    run(get_khbus_info("寝屋川市駅［東口］", 2, snapshot_dir=tmp_path))
+    run(get_khbus_info("寝屋川市駅［東口］", 2, snapshot_dir=tmp_path))
+    assert len(list(tmp_path.rglob("*.gz"))) == 1
+
+
+def test_bus_snapshot_saved_even_if_validation_fails(bus_api, tmp_path):
+    """仕様変更でパースに失敗した応答こそ残したい"""
+    bus_api["body"] = '{"unexpected": true}'
+    with pytest.raises(KeihanAPIError):
+        run(get_khbus_info("京阪香里園", 1, snapshot_dir=tmp_path))
+    saved = next(tmp_path.rglob("*.gz"))
+    assert gzip.decompress(saved.read_bytes()) == b'{"unexpected": true}'
