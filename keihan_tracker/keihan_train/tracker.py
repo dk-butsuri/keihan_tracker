@@ -25,11 +25,11 @@ from .parse import (KeihanAPIError, _parse, _parse_delay_minutes,
                     SELECT_STATION_URL, TRANSFER_GUIDE_URL, START_TIME_LIST_URL, TRAIN_POSITION_URL)
 from .client import KHClient, USER_AGENT, write_snapshot
 from .state import KHState, JST, DATE_CHANGE_TIME, _deprecated
-from pydantic import AliasChoices, BaseModel, Field, field_validator
 from typing import Optional, Literal, Sequence
 from httpx import AsyncClient
 from pathlib import Path
 import dataclasses
+import functools
 import xml.etree.ElementTree as ET
 from tabulate import tabulate
 import datetime
@@ -83,6 +83,29 @@ def _unwrap_master(master):
     return master.state if isinstance(master, KHTracker) else master
 
 
+def _init_aliases(**aliases: str):
+    """
+    dataclass の __init__ に、別名のキーワードを足す（pydantic の alias の代わり）。
+    別名で渡された値は、本来の名前の引数として渡す。@dataclass の外側に付ける。
+    InitVar では、別名と同じ名前の property（wdfBlockNo・train_type など）とぶつかるため、この形にしている。
+    """
+    def decorate(cls):
+        init = cls.__init__
+
+        @functools.wraps(init)
+        def __init__(self, *args, **kwargs):
+            for alias, name in aliases.items():
+                if alias in kwargs:
+                    if name in kwargs:
+                        raise TypeError(f"{alias} と {name} は同時に渡せません")
+                    kwargs[name] = kwargs.pop(alias)
+            init(self, *args, **kwargs)
+
+        cls.__init__ = __init__
+        return cls
+    return decorate
+
+
 def _calc_train_position(master: "KHState", col: int, row: int, direction: Literal["up","down"]) -> TrainPosition:
     line, st1, st2 = calc_position(col, row)
     if not st2:
@@ -108,20 +131,22 @@ def _calc_train_position(master: "KHState", col: int, row: int, direction: Liter
         line = line,
     )
 
-class StationData(BaseModel):
+# eq=False: 駅は下の __eq__ / __hash__（駅番号で比べる）を使う
+@dataclasses.dataclass(slots=True, kw_only=True, eq=False)
+class StationData:
     """
-    駅情報を表すモデル。
+    駅情報を表すクラス。
     """
     master:        "KHState" #親インスタンス
     line:           set[LineLiteral]
     station_number: int
     station_name:   MultiLang
-    transfer:       StationConnections = StationConnections()
+    transfer:       StationConnections = dataclasses.field(default_factory=StationConnections)
 
-    @field_validator("master", mode="before")
-    @classmethod
-    def _master_to_state(cls, master):
-        return _unwrap_master(master)
+    def __post_init__(self) -> None:
+        # master に KHTracker が渡されたら、その状態を使う。渡された set は複製する
+        self.master = _unwrap_master(self.master)
+        self.line = set(self.line)
 
     @property
     def arriving_trains(self):
@@ -208,9 +233,6 @@ class StationData(BaseModel):
 
     def __hash__(self) -> int:
         return hash(self.station_number)
-    
-    # masterの型を許可する
-    model_config = {"arbitrary_types_allowed": True}
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -251,12 +273,12 @@ class TrainHistoryRecord:
         _deprecated("TrainHistoryRecord.is_at_station", "position.station is not None を使ってください。")
         return self.position.station is not None
 
-    # masterの型を許可する
-    model_config = {"arbitrary_types_allowed": True}
 
-class StopStationData(BaseModel):
+# eq=False: 同じ停車駅の中身が偶然同じでも、別の停車駅として扱う（値で比べる箇所は無い）
+@dataclasses.dataclass(slots=True, kw_only=True, eq=False)
+class StopStationData:
     """
-    列車の停車駅情報を表すモデル。
+    列車の停車駅情報を表すクラス。
     - is_start: 始発駅か
     - is_stop: 停車駅か
     - station: 駅データ
@@ -269,32 +291,37 @@ class StopStationData(BaseModel):
     station:    StationData
     time:       Optional[datetime.datetime] = None #標準到着時刻、(12,00)の形式
 
-class TrainData(BaseModel):
+# eq=False: 列車は同一性で比べる（値で比べる箇所は無い。master を含む全フィールドの比較も避ける）
+# wdfBlockNo は v2.8 までのキーワード名
+@_init_aliases(wdfBlockNo="wdf")
+@dataclasses.dataclass(slots=True, kw_only=True, eq=False)
+class TrainData:
     """
-    列車情報を表すモデル。
+    列車情報を表すクラス。
     - 列車番号、種別、編成、行先、停車駅リストなどを保持
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
     """
     master:     "KHState"
     # WDF番号（その日の列車を区別する番号）。v2.8 までの wdfBlockNo= でも作れる
-    wdf:int = Field(validation_alias=AliasChoices("wdf", "wdfBlockNo"))
+    wdf:int
     date:datetime.date
     has_premiumcar: Optional[bool]
     train_formation: Optional[int]
-    route_stations: list[StopStationData] = Field(default_factory=list)      # 経路にある駅リスト
+    route_stations: list[StopStationData] = dataclasses.field(default_factory=list)      # 経路にある駅リスト
     delay_minutes: int = 0
     # その日、走っている間の位置情報ごとの値（古い順）。走り終えた後も残り、また走り出すと続きから加える
-    history: list[TrainHistoryRecord] = Field(default_factory=list)
+    history: list[TrainHistoryRecord] = dataclasses.field(default_factory=list)
     # 以下はActiveだった時のデータを保持する変数
     actual_train_type: Optional[TrainType] = None
     actual_direction: Optional[Literal["up","down"]] = None
     actual_destination: Optional[StationData] = None
     actual_line: Optional[LineLiteral] = None
 
-    @field_validator("master", mode="before")
-    @classmethod
-    def _master_to_state(cls, master):
-        return _unwrap_master(master)
+    def __post_init__(self) -> None:
+        # master に KHTracker が渡されたら、その状態を使う。渡されたリストは複製する（中身は同じ）
+        self.master = _unwrap_master(self.master)
+        self.route_stations = list(self.route_stations)
+        self.history = list(self.history)
 
     @property
     def has_dia(self) -> bool:
@@ -551,22 +578,23 @@ class TrainData(BaseModel):
             else:
                 body.append([f"不明",f"{stop.station}"])
         return text + tabulate(body, header)
-    
-    # masterの型を許可する
-    model_config = {"arbitrary_types_allowed": True}
 
 
+# train_type・direction・destination は、位置情報の値を入れる active_* のキーワード名
+@_init_aliases(wdfBlockNo="wdf", train_type="active_train_type",
+               direction="active_direction", destination="active_destination")
+@dataclasses.dataclass(slots=True, kw_only=True, eq=False)
 class ActiveTrainData(TrainData):
     """
-    現在アクティブな列車情報を表すモデル。
+    現在アクティブな列車情報を表すクラス。
     - 列車番号、種別、編成、行先、停車駅リストなどを保持
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
     """
     train_formation:Optional[int] = None       # 編成番号
     train_number:   str             # 列車番号（1051号など）
-    active_train_type:  TrainType            = Field(alias="train_type")
-    active_direction:   Literal["up","down"] = Field(alias="direction")     # 方向（up:京都方面、down:大阪方面）
-    active_destination: Optional[StationData] = Field(alias="destination")  # 行先駅（行先なし(00)ならNone）
+    active_train_type:  TrainType
+    active_direction:   Literal["up","down"]      # 方向（up:京都方面、down:大阪方面）
+    active_destination: Optional[StationData]     # 行先駅（行先なし(00)ならNone）
     is_special:     bool            # 臨時か
     position_since: Optional[datetime.datetime] = None # 今の座標に来た時刻（位置情報のfileCreatedTime）。出現時は最初に観測した時刻
     has_premiumcar: Optional[bool] = None
@@ -601,7 +629,8 @@ class ActiveTrainData(TrainData):
         if self.active_destination is not None:
             return self.active_destination
         if self.has_dia:
-            return super().destination
+            # slots=True で作り直されたクラスでも動くよう、引数付きの super を使う
+            return super(ActiveTrainData, self).destination
         return None
 
     @property
@@ -824,9 +853,6 @@ class ActiveTrainData(TrainData):
             date=self.date
         )
         return train
-
-    # masterの型を許可する
-    model_config = {"arbitrary_types_allowed": True}
 
 def _state_property(name: str, doc: str = "") -> property:
     """KHState の属性を、KHTracker から同じ名前で読み書きできるようにする"""
