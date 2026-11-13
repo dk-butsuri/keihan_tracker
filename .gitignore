@@ -6,3 +6,5 @@ __pycache__
 /keihan_tracker.egg-info/
 test.py
 /snapshots/
+/analysis
+/tools
