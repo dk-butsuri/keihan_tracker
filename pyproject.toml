@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "keihan_tracker"
+version = "3.0.0"
+description = "京阪電車・バスの非公式接近情報API解析ライブラリ"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "dk-butsuri"}]
+maintainers = [{name = "dk-butsuri"}]
+dependencies = ["pydantic>=2", "httpx", "tzdata"]
+keywords = ["keihan", "train", "parse", "parsing", "validation", "tracking", "position", "京阪", "鉄道", "位置"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Internet :: WWW/HTTP",
+]
+
+[project.urls]
+Homepage = "https://github.com/dk-butsuri/keihan_tracker"
+"Bug Tracker" = "https://github.com/dk-butsuri/keihan_tracker/issues"
+Source = "https://github.com/dk-butsuri/keihan_tracker"
+
+[tool.setuptools.packages.find]
+include = ["keihan_tracker*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+keihan_tracker = ["py.typed"]

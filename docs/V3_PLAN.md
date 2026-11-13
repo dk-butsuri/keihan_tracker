@@ -30,7 +30,7 @@ v3.0 で行う構造改定の計画です。2026-11-13 時点で決めたこと�
 | 高レベル（非同期） | `KHTracker` | `fetch_pos()` も残す |
 | 高レベル（同期） | `KHTrackerSync` | 新規 |
 | 通信なしの状態管理 | `KHState` | 新規。`KHTracker` / `KHTrackerSync` は継承ではなく `tracker.state` に持つ（step 2 で決定） |
-| 取得だけ | `KHClient` / `KHClientSync` | 新規 |
+| 取得だけ | `KHClient` | 新規。同期版は作らない（step 5b で決定） |
 | 列車 | `TrainData` / `ActiveTrainData` | 継承関係も今のまま |
 | 駅・停車駅・履歴 | `StationData` / `StopStationData` / `TrainHistoryRecord` | 今のまま |
 
@@ -299,3 +299,4 @@ step 5 は次の順に、1項目ずつ別のコミット（またはPR）にす�
    - 状況（2026-11-14）：済み（5c）。`BusClient` に通信・30秒キャッシュ・保存済み本文を移し、パースを `bus/parse.py` に集めた。既存のモジュール関数は内部の共通 BusClient を使い、通信ごとに AsyncClient を開閉する。スナップショットの形式・名前とエラー時の挙動は維持した。既存テストはキャッシュ等の内部状態を差し替える場所だけ新しい層へ移した。snapshot_dir は呼び出しごとに内部メソッドへ渡し、共通インスタンスの設定を書き換えない。
    - 状況（2026-11-14）：済み（5d）。`EtaPolicy`・`EtaHidden`・`EtaResult`・`estimate_arrival` と非同期版・同期版の `eta` を追加した。signage の分単位の round、負の残り時間の0への補正、前詰まりの路線・駅の範囲も維持した。入力が予測不能なら NO_TIMETABLE・NOT_STOPPING・NO_TIME・PASSED・UNKNOWN_POSITION を返すことにした（例外より呼び出し側で理由を扱いやすいため）。複数の理由があるときの優先順は docstring に記載した。リポジトリ外に clone した signage（e0eb4aa）の関数を直接呼び、平日・土休日を含む全走行列車×全停車駅22,494組の入力と期待値を新規fixtureに保存し、元の境界値テストも移した。不一致470組はすべて signage の過去時刻による行の除外で、変更せず docs/ETA_SIGNAGE.md と新規CSVに一覧化した。通常の平日fixture854組は全件一致。元の土休日fixtureは走行列車0本なので、別日の土休日Waybackの位置情報で補った。一覧表示の件数・残り時間フィルターと未走行の後続列車の表示制御は単独関数には持ち込まない。
 6. README・RELIABILITY の更新、`MIGRATION.md`、`pyproject.toml`、3.0.0 リリース。中身は「11. step 5・6 の仕様」の 6
+   - 状況（2026-11-14）：済み。setup.py を pyproject.toml に移し、3.0.0・Python >=3.10・SPDX の MIT 表記にした。ビルドには SPDX 表記を扱える setuptools >=77.0.3 を選び、収録するパッケージを keihan_tracker 配下に絞り、py.typed と LICENSE を明示した。README・RELIABILITY を新しいAPI・同期版・watch・予測・層分けに合わせ、MIGRATION.md に削除・改名・master・読み取り専用辞書・比較・dataclass化の書き換え例をまとめた。始発時刻は既存ダイヤ30件・延べ31,757列車を調べ、"-" なしで先頭駅に時刻がある2,922列車を確認した（「いつも None」には例外がある）。逆算は同一区間でも発車時刻差が一定でなく一意に決まらない。補完処理は追加せず docs/START_TIMES.md に調査を記録した。Python 3.12.10 で各段階の全テスト（5a: 710件、5b: 738件、5c: 742件、5d・6: 838件）を実行し、仕上げでは下限の Python 3.10.20 でも838件すべて成功した。ローカルでsdist→wheelのビルド、MIT・Python下限・依存・py.typedのメタデータと収録ファイル、wheelのインストール後のimportも検証した。タグ・Release・PyPI公開・push は行っていない。

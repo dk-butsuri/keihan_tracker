@@ -315,7 +315,8 @@ class StopStationData:
     - is_start: 始発駅か
     - is_stop: 停車駅か
     - station: 駅データ
-    - time: 公式のダイヤの stationDepTime（発車時刻）。始発駅は公式のデータが "-" のため None（datetime）
+    - time: 公式のダイヤの stationDepTime（発車時刻）。"-" の始発駅などは None（datetime）
+      "-" がないダイヤでは、先頭の停車駅の既存の時刻を保持する
     - train: この停車駅を持つ列車（逆参照）。いつも KHState.trains に今入っている列車を指す
 
     比較と引き算
