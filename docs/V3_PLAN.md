@@ -214,6 +214,7 @@ class EtaResult:
    - 状況（2026-11-13）：済み。`parse.py`・`client.py`・`state.py` を作り、`KHTracker` は今の属性を property で `state` / `client` に委譲する。`master` は `KHState` になった（上の「3. 位置まわりの名前」の後の注意を参照）。ダイヤは位置情報の後に渡す（臨時列車は走行中のものだけ登録するため）。`KHState()` は営業日を持たずに始まり、`apply_positions` で決まる。モジュール名（`schemes`→`schemas` など）は変えていない
 3. dataclass 化、ダイヤの差分更新、索引
    - 状況（2026-11-13）：dataclass 化（3a）は済み。`slots=True, kw_only=True, eq=False`。pydantic の alias は `_init_aliases`、`master` の読み替えとリストの複製は `__post_init__` で保った。同値性テストは 104.9秒 → 74.5秒
+   - 状況（2026-11-13）：3b も済み。差分更新（全登録は新しいダイヤ・営業日の変化・`self.trains` の直接書き換えのときだけ）、駅→停車駅の索引、`StopStationData.train`、`get_stop` を入れた。保存したスナップショット1日分で `fetch` 1回 約98ms → 中央値 約1.7ms（ダイヤが変わる毎時だけ約250ms）
    - 3b（差分更新・索引）で、停車駅の `train`・`get_stop` も入れる（「10. 停車駅」）。新しく走り出した列車は、今は毎回のダイヤ登録で停車駅を受け取っているため、差分更新ではその列車だけ登録し直す。営業日が変わったときは全部作り直す
 4. 位置まわりの改名、`position`、`status`、`find_trains` の `@overload`、比較（「9. 比較」）
 5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）

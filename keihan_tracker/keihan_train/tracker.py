@@ -160,13 +160,12 @@ class StationData:
     def trains(self) -> list[tuple["TrainData","StopStationData"]]:
         """
         この駅に 今後停車する or 停車中 or 停車した すべての列車返す。[((12,00),TrainData), ...]
-        KHTracker.trains から、stop_stationsに自身（self）が含まれる列車を抽出する。
+        stop_stationsに自身（self）が含まれる列車を、KHState が持つ駅→停車駅の索引から取る。
         """
-        trains:list[tuple[TrainData,StopStationData]] = []
-        for train in self.master.trains.values():
-            for stop in train.stop_stations:
-                if stop.station == self and stop.is_stop:
-                    trains.append((train,stop))
+        # 駅→停車駅の索引から取る（全列車をなめない）。並びは self.trains の順なので、時刻が同じ列車の順番は変わらない
+        trains:list[tuple[TrainData,StopStationData]] = [
+            (stop.train, stop) for stop in self.master._stops_at(self)
+        ]
 
         # 時刻不明の停車は後ろに回す
         trains.sort(key = lambda t:t[1].time or datetime.datetime.max.replace(tzinfo=JST))
@@ -206,7 +205,7 @@ class StationData:
         この駅から乗れる列車（upcoming_trains）で、この先の各駅に最も早く着く列車とその到着時刻。{駅: (列車, 到着時刻)}
         「〇〇には先着」の表示に使う。
         - 乗り換えは考えない（その列車に乗ったまま着く時刻で比べる）
-        - 到着時刻はダイヤの予定時刻で、遅延を足さない
+        - 到着時刻はダイヤの予定時刻で、遅延を足さない（中身は公式の発車時刻。StopStationData.time を参照）
         - 時刻不明の停車駅は使わない。到着時刻が同じなら、この駅を先に出る列車にする
         - この駅自身は含まない
         """
@@ -282,14 +281,17 @@ class StopStationData:
     - is_start: 始発駅か
     - is_stop: 停車駅か
     - station: 駅データ
-    - time: 標準到着時刻（datetime）
+    - time: 公式のダイヤの stationDepTime（発車時刻）。始発駅は公式のデータが "-" のため None（datetime）
+    - train: この停車駅を持つ列車（逆参照）。いつも KHState.trains に今入っている列車を指す
     """
 
     is_start:   bool = False   # 始発駅かどうか
     is_final:   bool = False   # 終着駅かどうか
     is_stop:    bool = True    # 停車するかどうか
     station:    StationData
-    time:       Optional[datetime.datetime] = None #標準到着時刻、(12,00)の形式
+    time:       Optional[datetime.datetime] = None # 発車時刻（stationDepTime）
+    # 列車が置き換わる（走り出す・運行終了）と付け替える。repr に含めると、列車の repr と循環する
+    train:      Optional["TrainData"] = dataclasses.field(default=None, repr=False)
 
 # eq=False: 列車は同一性で比べる（値で比べる箇所は無い。master を含む全フィールドの比較も避ける）
 # wdfBlockNo は v2.8 までのキーワード名
@@ -555,13 +557,19 @@ class TrainData:
         # ダイヤの並び順は走行順。時刻不明の停車駅もあるため、時刻でソートしない
         return [station for station in self.route_stations if station.is_stop == True]
     
-    def get_stop_time(self, station:StationData) -> Optional[datetime.datetime]:
-        """駅に停車する時刻を返します。"""
+    def get_stop(self, station:StationData) -> Optional[StopStationData]:
+        """駅に停車する停車駅（StopStationData）を返します。停車しない駅（通過駅・経路にない駅）は None。"""
         for stop in self.stop_stations:
             if stop.station == station:
-                return stop.time
+                return stop
         return None
-        # 整形して文字列化
+
+    def get_stop_time(self, station:StationData) -> Optional[datetime.datetime]:
+        """駅に停車する時刻を返します。"""
+        stop = self.get_stop(station)
+        return stop.time if stop is not None else None
+
+    # 整形して文字列化
 
     def __str__(self) -> str:
         start = self.start_station if self.has_dia else "不明"
