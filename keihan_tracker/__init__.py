@@ -1,5 +1,5 @@
 from .keihan_train import KHTracker
-from .keihan_train.tracker import TrainData, ActiveTrainData, TrainHistoryRecord, TrainPosition, LineLiteral, StationData, StopStationData, DiaNotFoundError, KeihanAPIError
+from .keihan_train.tracker import TrainData, ActiveTrainData, TrainHistoryRecord, TrainPosition, TrainStatus, LineLiteral, StationData, StopStationData, DiaNotFoundError, KeihanAPIError
 from .keihan_train.schemes import TrainType
 from .keihan_train.state import KHState
 from .keihan_train.client import KHClient

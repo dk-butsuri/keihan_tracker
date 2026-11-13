@@ -635,8 +635,9 @@ async def fetch_tracker_data():
         }
         
         if isinstance(train, ActiveTrainData):
-            is_stopping = train.is_stopping
-            next_st = train.next_station
+            is_stopping = train.stopped_at is not None
+            position = train.position
+            next_st = position.station or position.ahead
             
             if next_st:
                 current_pos["is_stopping"] = is_stopping

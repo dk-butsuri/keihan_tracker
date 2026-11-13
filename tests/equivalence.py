@@ -3,7 +3,8 @@
 
 v3 で内部を作り直しても、種別・方向・停車駅などの推定が変わっていないことを確かめるため、
 v2.8 の出力を tests/fixtures/equivalence/ に保存しておき、test_equivalence.py で比べる。
-キーは v2 の名前のまま。v3 で名前を変えたら、この関数で v2 の名前に読み替えて書き出す。
+キーは v2 の名前のまま。v3 で名前を変えたので、この関数で v2 の名前に読み替えて書き出す
+（next_station → position.station or position.ahead、is_stopping → status など）。
 
 保存し直すとき（推定を意図して変えたときだけ）:
     python tests/equivalence.py
@@ -13,7 +14,6 @@ import datetime
 import gzip
 import json
 import sys
-import warnings
 from pathlib import Path
 from typing import Any, Callable
 
@@ -43,7 +43,7 @@ def _stop(stop) -> list:
 
 
 def dump_tracker(tracker) -> dict:
-    from keihan_tracker import ActiveTrainData
+    from keihan_tracker import ActiveTrainData, TrainStatus
 
     trains: dict[str, dict] = {}
     for wdf, train in sorted(tracker.trains.items()):
@@ -72,10 +72,10 @@ def dump_tracker(tracker) -> dict:
                 "location": [train.location_col, train.location_row],
                 "position_since": _time(train.position_since),
                 "staying_seconds": train.staying_time.total_seconds(),
-                "next_station": _safe(lambda: _station(train.next_station)),
-                "next_stop_station": _safe(lambda: _station(train.next_stop_station)),
-                "is_stopping": _safe(lambda: train.is_stopping),
-                "is_at_station": _safe(lambda: train.is_at_station),
+                "next_station": _safe(lambda: _station(train.position.station or train.position.ahead)),
+                "next_stop_station": _safe(lambda: _station(train.current_or_next_stop)),
+                "is_stopping": _safe(lambda: None if train.status is TrainStatus.UNKNOWN else train.status is TrainStatus.STOPPED),
+                "is_at_station": _safe(lambda: train.position.station is not None),
                 "is_at_start_station": _safe(lambda: train.is_at_start_station),
                 "estimated_delay_minutes": _safe(lambda: train.estimated_delay_minutes),
             })
@@ -86,26 +86,23 @@ def dump_tracker(tracker) -> dict:
         stations[str(number)] = {
             "name": station.station_name.ja,
             "line": sorted(station.line),
-            "arriving": _safe(lambda: sorted(t.wdfBlockNo for t in station.arriving_trains)),
-            "trains": [t.wdfBlockNo for t, _ in station.trains],
-            "upcoming": _safe(lambda: [t.wdfBlockNo for t, _ in station.upcoming_trains]),
+            "arriving": _safe(lambda: sorted(t.wdf for t in station.arriving_trains)),
+            "trains": [t.wdf for t, _ in station.trains],
+            "upcoming": _safe(lambda: [t.wdf for t, _ in station.upcoming_trains]),
         }
 
     max_delay = tracker.max_delay_train
     return {
         "date": tracker.date.isoformat(),
         "position_created_at": _time(tracker.position_created_at),
-        "max_delay_train": None if max_delay is None else max_delay.wdfBlockNo,
+        "max_delay_train": None if max_delay is None else max_delay.wdf,
         "trains": trains,
         "stations": stations,
     }
 
 
 def dump(tracker) -> dict:
-    # v2 の名前で読むため、非推奨警告は出さない
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore", DeprecationWarning)
-        return dump_tracker(tracker)
+    return dump_tracker(tracker)
 
 
 def golden_path(name: str) -> Path:

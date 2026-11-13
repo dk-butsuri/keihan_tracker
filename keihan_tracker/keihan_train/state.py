@@ -18,23 +18,18 @@ from .schemes import (TransferGuideInfo,
                       )
 from .parse import _parse_delay_minutes
 import warnings
-from typing import Mapping, Optional, Literal, Sequence, TYPE_CHECKING
+from typing import Mapping, Optional, Literal, TYPE_CHECKING, overload
 from types import MappingProxyType
 import datetime
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
     # tracker.py が state.py を import するため、実行時には関数の中で import する
-    from .tracker import StationData, TrainData, ActiveTrainData, StopStationData
+    from .tracker import StationData, TrainData, ActiveTrainData, StopStationData, TrainStatus
 
 JST = ZoneInfo("Asia/Tokyo")
 # 営業日が変わる時刻。終電（2時ごろまで）と、始発前に列車が現れる4時半ごろの間
 DATE_CHANGE_TIME = 4
-
-
-def _deprecated(old: str, new: str) -> None:
-    """v3 で削除・改名する名前を使ったときの警告。new に書き換え先を書く"""
-    warnings.warn(f"{old} は v3 で削除します。{new}", DeprecationWarning, stacklevel=3)
 
 
 class KHState:
@@ -424,42 +419,69 @@ class KHState:
         final_station = [stop for stop in self._trains[wdf].route_stations if stop.is_stop][-1]
         final_station.is_final = True
 
+    @overload
     def find_trains(
             self,
-            active:         Optional[bool] = None,
-            train_type:           Optional[TrainType] = None,
+            active:         Literal[True],
+            train_type:     Optional[TrainType] = None,
             direction:      Optional[Literal["up","down"]] = None,
             is_special:     Optional[bool] = None,
             train_number:   Optional[str] = None,
             has_premiumcar: Optional[bool] = None,
             destination:    Optional[StationData] = None,
-            next_stop_station:   Optional[StationData] = None,
             min_delay:      Optional[int] = None,
             max_delay:      Optional[int] = None,
-            is_stopping:    Optional[bool] = None,
+            status:         Optional[TrainStatus] = None,
             line:           Optional[LineLiteral] = None,
             current_or_next_stop: Optional[StationData] = None,
-            ) -> Sequence[TrainData]:
+            ) -> list[ActiveTrainData]: ...
+    @overload
+    def find_trains(
+            self,
+            active:         Optional[bool] = None,
+            train_type:     Optional[TrainType] = None,
+            direction:      Optional[Literal["up","down"]] = None,
+            is_special:     Optional[bool] = None,
+            train_number:   Optional[str] = None,
+            has_premiumcar: Optional[bool] = None,
+            destination:    Optional[StationData] = None,
+            min_delay:      Optional[int] = None,
+            max_delay:      Optional[int] = None,
+            status:         Optional[TrainStatus] = None,
+            line:           Optional[LineLiteral] = None,
+            current_or_next_stop: Optional[StationData] = None,
+            ) -> list[TrainData]: ...
+    def find_trains(
+            self,
+            active:         Optional[bool] = None,
+            train_type:     Optional[TrainType] = None,
+            direction:      Optional[Literal["up","down"]] = None,
+            is_special:     Optional[bool] = None,
+            train_number:   Optional[str] = None,
+            has_premiumcar: Optional[bool] = None,
+            destination:    Optional[StationData] = None,
+            min_delay:      Optional[int] = None,
+            max_delay:      Optional[int] = None,
+            status:         Optional[TrainStatus] = None,
+            line:           Optional[LineLiteral] = None,
+            current_or_next_stop: Optional[StationData] = None,
+            ) -> list[TrainData]:
         """
         条件に合致する列車を検索してリストで返します。
-        - active: 走行中か
+        - active: 走行中か。True を渡すと戻り値の型が list[ActiveTrainData] になる
         - type: 列車種別（例: "普通"）
         - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）。予定の列車は始発・終着から推定した方向
         - is_special: 臨時列車かどうか
         - train_number: 列車番号（例: "2201"）
         - has_premiumcar: プレミアムカー付きかどうか
         - destination: 行き先駅
+        - status: 停車中・通過中・駅間・不明（TrainStatus）
         - current_or_next_stop: 停車中の駅 or 次の停車駅
-        - next_stop_station: 【非推奨】current_or_next_stop と同じ
         - line: 路線。走行中の列車は今いる路線、走行中でない列車は TrainData.line（走ったことがあればそのときの路線、なければ停車駅から推定した路線）
-        is_special・train_number・current_or_next_stop・is_stopping は走行中の列車だけが持つ値のため、
+        is_special・train_number・current_or_next_stop・status は走行中の列車だけが持つ値のため、
         指定すると走行中でない列車は当てはまりません。
         """
         from .tracker import ActiveTrainData
-        if next_stop_station is not None:
-            _deprecated("find_trains の next_stop_station", "同じ意味の current_or_next_stop を使ってください。")
-            if current_or_next_stop is None:
-                current_or_next_stop = next_stop_station
         trains: list[TrainData|ActiveTrainData] = []
         for train in self._trains.values():
             # 条件に合致するかチェック
@@ -481,7 +503,7 @@ class KHState:
                 continue
 
             # 以下は走行中の列車だけが持つ値。指定されたら、走行中でない列車は当てはまらない
-            active_only = (current_or_next_stop, is_special, train_number, is_stopping)
+            active_only = (current_or_next_stop, is_special, train_number, status)
             if not isinstance(train, ActiveTrainData):
                 if any(v is not None for v in active_only):
                     continue
@@ -492,7 +514,7 @@ class KHState:
                     continue
                 if train_number is not None and train.train_number != train_number:
                     continue
-                if is_stopping is not None and train._is_stopping() != is_stopping:
+                if status is not None and train.status is not status:
                     continue
 
             trains.append(train)

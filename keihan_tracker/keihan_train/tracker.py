@@ -8,7 +8,6 @@ if __name__ == "__main__":
     exit()
 
 from .schemes import (TransferGuideInfo,
-                      FileList,
                       SelectStation,
                       startTimeList,
                       trainPositionList,
@@ -24,13 +23,13 @@ from .parse import (KeihanAPIError, _parse, _parse_delay_minutes,
                     parse_select_station, parse_transfer_guide, parse_timetable, parse_positions,
                     SELECT_STATION_URL, TRANSFER_GUIDE_URL, START_TIME_LIST_URL, TRAIN_POSITION_URL)
 from .client import KHClient, USER_AGENT, write_snapshot
-from .state import KHState, JST, DATE_CHANGE_TIME, _deprecated
-from typing import Optional, Literal, Sequence
+from .state import KHState, JST, DATE_CHANGE_TIME
+from enum import Enum
+from typing import Optional, Literal, overload
 from httpx import AsyncClient
 from pathlib import Path
 import dataclasses
 import functools
-import xml.etree.ElementTree as ET
 from tabulate import tabulate
 import datetime
 
@@ -63,6 +62,20 @@ def _line_order(line: LineLiteral, direction: Literal["up","down"]) -> list[int]
     return order if direction == "up" else list(reversed(order))
 
 
+class TrainStatus(Enum):
+    """
+    走行中の列車の状態。ActiveTrainData.status で取る。
+    - STOPPED: 停車中（停車駅に止まっている）
+    - PASSING: 駅の座標にいるが、停車駅ではない（通過中）
+    - BETWEEN: 駅間を走っている
+    - UNKNOWN: 停車駅が分からない（ダイヤが無い、終点を過ぎたなど）
+    """
+    STOPPED = "stopped"
+    PASSING = "passing"
+    BETWEEN = "between"
+    UNKNOWN = "unknown"
+
+
 @dataclasses.dataclass(frozen=True, slots=True)
 class TrainPosition:
     """
@@ -87,7 +100,7 @@ def _init_aliases(**aliases: str):
     """
     dataclass の __init__ に、別名のキーワードを足す（pydantic の alias の代わり）。
     別名で渡された値は、本来の名前の引数として渡す。@dataclass の外側に付ける。
-    InitVar では、別名と同じ名前の property（wdfBlockNo・train_type など）とぶつかるため、この形にしている。
+    InitVar では、別名と同じ名前の property（train_type など）とぶつかるため、この形にしている。
     """
     def decorate(cls):
         init = cls.__init__
@@ -260,18 +273,6 @@ class TrainHistoryRecord:
         """その時点の線路上の位置"""
         return _calc_train_position(self.master, self.location_col, self.location_row, self.direction)
 
-    @property
-    def stopping_station(self) -> Optional[StationData]:
-        """【非推奨】position.station を使ってください。"""
-        _deprecated("TrainHistoryRecord.stopping_station", "position.station を使ってください。")
-        return self.position.station
-
-    @property
-    def is_at_station(self) -> bool:
-        """【非推奨】その時点で駅の位置座標にいたか。position.station is not None を使ってください。"""
-        _deprecated("TrainHistoryRecord.is_at_station", "position.station is not None を使ってください。")
-        return self.position.station is not None
-
 
 # eq=False: 同じ停車駅の中身が偶然同じでも、別の停車駅として扱う（値で比べる箇所は無い）
 @dataclasses.dataclass(slots=True, kw_only=True, eq=False)
@@ -294,8 +295,6 @@ class StopStationData:
     train:      Optional["TrainData"] = dataclasses.field(default=None, repr=False)
 
 # eq=False: 列車は同一性で比べる（値で比べる箇所は無い。master を含む全フィールドの比較も避ける）
-# wdfBlockNo は v2.8 までのキーワード名
-@_init_aliases(wdfBlockNo="wdf")
 @dataclasses.dataclass(slots=True, kw_only=True, eq=False)
 class TrainData:
     """
@@ -304,7 +303,7 @@ class TrainData:
     - stop_stations, start_station, get_stop_time で駅・時刻情報取得
     """
     master:     "KHState"
-    # WDF番号（その日の列車を区別する番号）。v2.8 までの wdfBlockNo= でも作れる
+    # WDF番号（その日の列車を区別する番号）
     wdf:int
     date:datetime.date
     has_premiumcar: Optional[bool]
@@ -329,12 +328,6 @@ class TrainData:
     def has_dia(self) -> bool:
         """ダイヤ（停車駅・時刻）があるか。運休・運転整理などで、ダイヤに無い列車が走ることがある。"""
         return len(self.route_stations) > 0
-
-    @property
-    def wdfBlockNo(self) -> int:
-        """【非推奨】wdf を使ってください。"""
-        _deprecated("wdfBlockNo", "wdf を使ってください。")
-        return self.wdf
 
     @property
     def line(self) -> LineLiteral:
@@ -589,7 +582,7 @@ class TrainData:
 
 
 # train_type・direction・destination は、位置情報の値を入れる active_* のキーワード名
-@_init_aliases(wdfBlockNo="wdf", train_type="active_train_type",
+@_init_aliases(train_type="active_train_type",
                direction="active_direction", destination="active_destination")
 @dataclasses.dataclass(slots=True, kw_only=True, eq=False)
 class ActiveTrainData(TrainData):
@@ -687,31 +680,25 @@ class ActiveTrainData(TrainData):
         return self._stops_from(position.station or position.ahead)
 
     @property
-    def is_stopping(self) -> Optional[bool]:
-        """【非推奨】列車が駅に停車中かどうか。stopped_at is not None を使ってください。"""
-        _deprecated("is_stopping", "stopped_at is not None を使ってください。")
-        return self._is_stopping()
-
-    def _is_stopping(self) -> Optional[bool]:
-        # v2 の is_stopping と同じく、停車駅が分からなければ None
+    def status(self) -> TrainStatus:
+        """停車中・通過中・駅間・不明のどれか（TrainStatus）"""
+        # 停車駅が分からなければ UNKNOWN（v2 の is_stopping が None だったのと同じ条件）
         if self.current_or_next_stop is None:
-            return None
-        return self.stopped_at is not None
-
-    @property
-    def is_at_station(self) -> bool:
-        """【非推奨】列車が駅の位置座標にあるか。position.station is not None を使ってください。"""
-        _deprecated("is_at_station", "position.station is not None を使ってください。")
-        return self.position.station is not None
+            return TrainStatus.UNKNOWN
+        if self.stopped_at is not None:
+            return TrainStatus.STOPPED
+        if self.position.station is not None:
+            return TrainStatus.PASSING
+        return TrainStatus.BETWEEN
 
     @property
     def is_at_start_station(self) -> Optional[bool]:
         """始発駅に停車中かどうか"""
-        is_stopping = self._is_stopping()
-        if is_stopping is None:
+        status = self.status
+        if status is TrainStatus.UNKNOWN:
             return None
 
-        if is_stopping is False:
+        if status is not TrainStatus.STOPPED:
             return False
 
         return self.stopped_at == self.start_station
@@ -813,20 +800,6 @@ class ActiveTrainData(TrainData):
         line, _, _ = calc_position(self.location_col, self.location_row)
         return line
 
-    @property
-    def next_station(self) -> StationData:
-        """【非推奨】停車中の駅、もしくは次に停車（通過）する駅。駅にいるなら position.station、駅間なら position.ahead を使ってください。"""
-        _deprecated("next_station", "駅にいるなら position.station、駅間なら position.ahead を使ってください。")
-        position = self.position
-        assert position.station or position.ahead
-        return position.station or position.ahead
-
-    @property
-    def next_stop_station(self) -> Optional[StationData]:
-        """【非推奨】停車中の駅、もしくは次に停車する駅。current_or_next_stop を使ってください。"""
-        _deprecated("next_stop_station", "同じ値の current_or_next_stop を使ってください。")
-        return self.current_or_next_stop
-
     # 整形して文字列化
     def __str__(self) -> str:
         text = f'【{"上り線" if self.direction == "up" else "下り線"}】 {"臨時" if self.is_special else ""}{self.train_type.value} {self.train_number}号: {self.destination or "不明"}行き {self.train_formation}編成/{self.cars}両 '
@@ -897,7 +870,6 @@ class KHTracker:
             date = date - datetime.timedelta(days=1)
         self.client = KHClient(snapshot_dir)
         self.state = KHState(date)
-        self.file_list: Optional[FileList] = None
 
         self.last_fetch_pos_datetime: Optional[datetime.datetime] = None # 最後にfetch_posを行った時刻
         self.last_regist_dia_datetime: Optional[datetime.datetime] = None # 最後にregist_diaでfetchした時刻
@@ -932,49 +904,74 @@ class KHTracker:
     def active_trains(self) -> dict[int, ActiveTrainData]:
         return self.state.active_trains
 
+    @overload
     def find_trains(
             self,
-            active:         Optional[bool] = None,
-            train_type:           Optional[TrainType] = None,
+            active:         Literal[True],
+            train_type:     Optional[TrainType] = None,
             direction:      Optional[Literal["up","down"]] = None,
             is_special:     Optional[bool] = None,
             train_number:   Optional[str] = None,
             has_premiumcar: Optional[bool] = None,
             destination:    Optional[StationData] = None,
-            next_stop_station:   Optional[StationData] = None,
             min_delay:      Optional[int] = None,
             max_delay:      Optional[int] = None,
-            is_stopping:    Optional[bool] = None,
+            status:         Optional[TrainStatus] = None,
             line:           Optional[LineLiteral] = None,
             current_or_next_stop: Optional[StationData] = None,
-            ) -> Sequence[TrainData]:
+            ) -> list[ActiveTrainData]: ...
+    @overload
+    def find_trains(
+            self,
+            active:         Optional[bool] = None,
+            train_type:     Optional[TrainType] = None,
+            direction:      Optional[Literal["up","down"]] = None,
+            is_special:     Optional[bool] = None,
+            train_number:   Optional[str] = None,
+            has_premiumcar: Optional[bool] = None,
+            destination:    Optional[StationData] = None,
+            min_delay:      Optional[int] = None,
+            max_delay:      Optional[int] = None,
+            status:         Optional[TrainStatus] = None,
+            line:           Optional[LineLiteral] = None,
+            current_or_next_stop: Optional[StationData] = None,
+            ) -> list[TrainData]: ...
+    def find_trains(
+            self,
+            active:         Optional[bool] = None,
+            train_type:     Optional[TrainType] = None,
+            direction:      Optional[Literal["up","down"]] = None,
+            is_special:     Optional[bool] = None,
+            train_number:   Optional[str] = None,
+            has_premiumcar: Optional[bool] = None,
+            destination:    Optional[StationData] = None,
+            min_delay:      Optional[int] = None,
+            max_delay:      Optional[int] = None,
+            status:         Optional[TrainStatus] = None,
+            line:           Optional[LineLiteral] = None,
+            current_or_next_stop: Optional[StationData] = None,
+            ) -> list[TrainData]:
         """
         条件に合致する列車を検索してリストで返します。
-        - active: 走行中か
+        - active: 走行中か。True を渡すと戻り値の型が list[ActiveTrainData] になる
         - type: 列車種別（例: "普通"）
         - direction: 上り線（京都方面）か下り線（大阪方面）か（"up" | "down"）。予定の列車は始発・終着から推定した方向
         - is_special: 臨時列車かどうか
         - train_number: 列車番号（例: "2201"）
         - has_premiumcar: プレミアムカー付きかどうか
         - destination: 行き先駅
+        - status: 停車中・通過中・駅間・不明（TrainStatus）
         - current_or_next_stop: 停車中の駅 or 次の停車駅
-        - next_stop_station: 【非推奨】current_or_next_stop と同じ
         - line: 路線。走行中の列車は今いる路線、走行中でない列車は TrainData.line（走ったことがあればそのときの路線、なければ停車駅から推定した路線）
-        is_special・train_number・current_or_next_stop・is_stopping は走行中の列車だけが持つ値のため、
+        is_special・train_number・current_or_next_stop・status は走行中の列車だけが持つ値のため、
         指定すると走行中でない列車は当てはまりません。
         """
-        # 警告の発生元が呼び出し側になるよう、ここで警告してから渡す
-        if next_stop_station is not None:
-            _deprecated("find_trains の next_stop_station", "同じ意味の current_or_next_stop を使ってください。")
-            if current_or_next_stop is None:
-                current_or_next_stop = next_stop_station
         return self.state.find_trains(
             active=active, train_type=train_type, direction=direction, is_special=is_special,
             train_number=train_number, has_premiumcar=has_premiumcar, destination=destination,
-            min_delay=min_delay, max_delay=max_delay, is_stopping=is_stopping, line=line,
+            min_delay=min_delay, max_delay=max_delay, status=status, line=line,
             current_or_next_stop=current_or_next_stop,
         )
-
     def delay_growing_trains(
             self,
             line:   Optional[LineLiteral] = None,
@@ -1050,11 +1047,6 @@ class KHTracker:
         """
         return self.state._dia_matches_positions()
 
-    async def regist_dia(self, download:bool):
-        "【非推奨】ダイヤ情報を更新します。更新が必要な際にはfetch_posから自動的に実行されます。"
-        _deprecated("regist_dia", "ダイヤは fetch_pos が必要なときに取得するため、呼ばなくてかまいません。")
-        return await self._regist_dia(download)
-
     async def _regist_dia(self, download:bool):
         starttime_list = self.starttime_list
         if download or starttime_list is None:
@@ -1077,32 +1069,6 @@ class KHTracker:
         # startTimeListからデータを登録
         self.state.apply_timetable(starttime_list)
         return self
-
-    async def fetch_filelist(self):
-        """【非推奨・未実装】FileList.xmlを取得する。"""
-        _deprecated("fetch_filelist", "代わりの機能はありません。")
-        text = await self._get("https://www.keihan.co.jp/tinfo/05-flist/FileList.xml")
-        root = ET.fromstring(text)
-
-        # 時刻設定
-        t = root.findtext("time")
-        if t:
-            time = datetime.datetime.strptime(t,"%Y%m%d%H%M%S").replace(tzinfo=JST)
-        else:
-            return
-        traininfo = root.findtext("traininfo") or ""
-        image_PC = root.findtext("image_PC") or ""
-        image_SP = root.findtext("image_SP") or ""
-        html_FP = root.findtext("html_FP") or ""
-
-        filelist = FileList(
-            time=time,
-            traininfo=traininfo,
-            image_PC=image_PC,
-            image_SP=image_SP,
-            html_FP=html_FP
-        )
-        self.file_list = filelist
 
     @property
     def max_delay_train(self) -> Optional[ActiveTrainData]:

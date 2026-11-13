@@ -41,14 +41,10 @@ def test_dataclasses_are_not_pydantic_models():
         assert not hasattr(cls, "model_dump")
 
 
-def test_train_data_accepts_wdf_and_wdfBlockNo(tracker):
-    by_new = TrainData(master=tracker, wdf=1, date=FIXTURE_DATE, has_premiumcar=None, train_formation=None)
-    by_old = TrainData(master=tracker, wdfBlockNo=1, date=FIXTURE_DATE, has_premiumcar=None, train_formation=None)
-    assert by_new.wdf == by_old.wdf == 1
+def test_train_data_requires_wdf(tracker):
+    assert TrainData(master=tracker, wdf=1, date=FIXTURE_DATE, has_premiumcar=None, train_formation=None).wdf == 1
     with pytest.raises(TypeError):
         TrainData(master=tracker, date=FIXTURE_DATE, has_premiumcar=None, train_formation=None)
-    with pytest.raises(TypeError):
-        TrainData(master=tracker, wdf=1, wdfBlockNo=1, date=FIXTURE_DATE, has_premiumcar=None, train_formation=None)
 
 
 def test_active_train_data_keyword_names(tracker):
@@ -67,13 +63,14 @@ def test_active_train_data_keyword_names(tracker):
         ActiveTrainData(master=tracker, wdf=1, date=FIXTURE_DATE)
 
 
-def test_active_train_data_accepts_wdfBlockNo(tracker):
+def test_active_train_data_accepts_train_type_alias(tracker):
     train = ActiveTrainData(
-        master=tracker, wdfBlockNo=9002, date=FIXTURE_DATE, train_number="9002",
+        master=tracker, wdf=9002, date=FIXTURE_DATE, train_number="9002",
         train_type=TrainType.LOCAL, direction="up", destination=None, is_special=False, cars=7,
         delay_text=tracker.stations[17].station_name, location_col=10, location_row=10,
     )
     assert train.wdf == 9002
+    assert train.train_type == TrainType.LOCAL
 
 
 def test_master_tracker_is_replaced_by_state(tracker):

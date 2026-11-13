@@ -226,7 +226,7 @@ def test_find_trains_active_only_conditions_exclude_others(tracker):
         tracker.find_trains(train_number=train.train_number),
         tracker.find_trains(is_special=train.is_special),
         tracker.find_trains(current_or_next_stop=train.current_or_next_stop),
-        tracker.find_trains(is_stopping=train.stopped_at is not None),
+        tracker.find_trains(status=train.status),
     ]:
         assert train in found
         assert all(isinstance(t, ActiveTrainData) for t in found)
@@ -852,7 +852,7 @@ def test_inactivated_train_without_dia(api, no_dia_tracker):
 
 def test_train_data_without_dia_or_actual_data(tracker):
     """ダイヤもアクティブ時の情報も無ければ、推定する情報は DiaNotFoundError になる"""
-    train = TrainData(master=tracker, wdfBlockNo=1, date=FIXTURE_DATE, has_premiumcar=None, train_formation=None)
+    train = TrainData(master=tracker, wdf=1, date=FIXTURE_DATE, has_premiumcar=None, train_formation=None)
     for name in ["train_type", "direction", "destination", "start_station"]:
         with pytest.raises(DiaNotFoundError):
             getattr(train, name)
