@@ -29,7 +29,7 @@ v3.0 で行う構造改定の計画です。2026-11-13 時点で決めたこと�
 |:---|:---|:---|
 | 高レベル（非同期） | `KHTracker` | `fetch_pos()` も残す |
 | 高レベル（同期） | `KHTrackerSync` | 新規 |
-| 通信なしの状態管理 | `KHState` | 新規。`KHTracker` / `KHTrackerSync` の基底クラス |
+| 通信なしの状態管理 | `KHState` | 新規。`KHTracker` / `KHTrackerSync` は継承ではなく `tracker.state` に持つ（step 2 で決定） |
 | 取得だけ | `KHClient` / `KHClientSync` | 新規 |
 | 列車 | `TrainData` / `ActiveTrainData` | 継承関係も今のまま |
 | 駅・停車駅・履歴 | `StationData` / `StopStationData` / `TrainHistoryRecord` | 今のまま |
@@ -219,5 +219,6 @@ class EtaResult:
    - `trains`・`stations` を読み取り専用（`MappingProxyType`）にした。外から書き換えられると索引とずれるため。中身は `KHState._trains`・`_stations` に持ち、書き換えは `apply_*` だけが行う。3b で入れていた書き換えの見張り（`_ensure_index`）は消した。`route_stations` の中身を書き換えたときは `_rebuild_index()` を呼ぶ
    - 3b（差分更新・索引）で、停車駅の `train`・`get_stop` も入れる（「10. 停車駅」）。新しく走り出した列車は、今は毎回のダイヤ登録で停車駅を受け取っているため、差分更新ではその列車だけ登録し直す。営業日が変わったときは全部作り直す
 4. 位置まわりの改名、`position`、`status`、`find_trains` の `@overload`、比較（「9. 比較」）
+   - 状況（2026-11-14）：済み。v2.9 で非推奨にした名前を全部消した（`wdfBlockNo=` の別名も）。`TrainStatus`（`STOPPED`・`PASSING`・`BETWEEN`・`UNKNOWN`）と `find_trains(status=)` を足した。同値性テストは期待値を変えずに通り、`status` が v2 の `is_stopping` と一致することも確かめた。`find_trains` の `@overload` は `active=True` のときだけ（走行中だけの条件の組み合わせは overload が増えすぎるため）。比較は「9. 比較」のとおり。`TrainType` は相手が `str` なら `TrainType` に直して比べる（`NotImplemented` を返すと文字コード順の比較にすり替わるため）
 5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）
 6. README・RELIABILITY の更新、`MIGRATION.md`、3.0.0 リリース
