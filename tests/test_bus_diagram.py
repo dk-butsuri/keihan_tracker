@@ -12,7 +12,7 @@ import pytest
 
 from keihan_tracker import BusDiagram, KeihanAPIError, fetch_diagram, get_khbus_info
 from keihan_tracker.bus import tracker as bus_tracker
-from keihan_tracker.keihan_train.tracker import JST, USER_AGENT
+from keihan_tracker.train.tracker import JST, USER_AGENT
 
 from conftest import load_fixture_bytes, run
 
@@ -254,13 +254,13 @@ def test_delay_read_from_delayed_bus(api):
     ("約1時間5分遅れ", 65),
 ])
 def test_delay_text_formats(text, minutes):
-    from keihan_tracker.bus.parsing import parse_bus_delay
+    from keihan_tracker.bus.parse import parse_bus_delay
     html = DELAYED_HTML.replace("約1分遅れ", text)
     assert parse_bus_delay(html).delay_minutes == minutes
 
 
 def test_delay_read_from_mobile_html():
-    from keihan_tracker.bus.parsing import parse_bus_delay
+    from keihan_tracker.bus.parse import parse_bus_delay
     html = """<dd class="sp tableDetail divbusstate"><ul class="bsul"><li class="busstate_header">
         <div class="fl bsno">1</div><span class="bsmidashi">定刻：</span> 21:11
         <span class="bsmidashi">(約3分遅れ)</span><span class="signal_status">受信中</span></li></ul></dd>"""
@@ -269,7 +269,7 @@ def test_delay_read_from_mobile_html():
 
 
 def test_unknown_delay_text_warns_and_keeps_text():
-    from keihan_tracker.bus.parsing import parse_bus_delay
+    from keihan_tracker.bus.parse import parse_bus_delay
     with pytest.warns(UserWarning, match="遅れの表記"):
         delay = parse_bus_delay(DELAYED_HTML.replace("約1分遅れ", "運休"))
     assert (delay.delay_text, delay.delay_minutes) == ("運休", None)

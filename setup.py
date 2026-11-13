@@ -9,7 +9,6 @@ URL = "https://github.com/dk-butsuri/keihan_tracker"
 INSTALL_REQUIRES = [
     "pydantic >= 2",
     "httpx",
-    "tabulate",
     "tzdata"
     ]
 LICENSE = "MIT License"

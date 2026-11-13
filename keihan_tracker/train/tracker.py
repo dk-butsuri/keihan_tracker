@@ -7,7 +7,7 @@ if __name__ == "__main__":
     print("このスクリプトは直接実行できません。README.mdを参照してください。")
     exit()
 
-from .schemes import (TransferGuideInfo,
+from .schemas import (TransferGuideInfo,
                       SelectStation,
                       startTimeList,
                       trainPositionList,
@@ -30,8 +30,8 @@ from httpx import AsyncClient
 from pathlib import Path
 import dataclasses
 import functools
-from tabulate import tabulate
 import datetime
+import unicodedata
 
 # 日付が変わったあと、ダイヤが今日のものだと確かめられなくても、取得のたびの取り直しをやめる時刻（安全装置）
 DIA_RETRY_DEADLINE = datetime.time(5, 30)
@@ -44,6 +44,19 @@ class DiaNotFoundError(ValueError):
     列車のダイヤ（startTimeList）が無いため、ダイヤから求める情報が分からないことを表す例外。
     運休・運転整理などで、位置情報にはあるがダイヤには無い列車が走ることがある。
     """
+
+
+def _format_table(body: list[list[str]], header: list[str]) -> str:
+    """日本語の文字幅を考慮して、列幅をそろえた表を作る。"""
+    def width(text: str) -> int:
+        return sum(2 if unicodedata.east_asian_width(c) in ("W", "F") else 1 for c in text)
+
+    rows = [header, *body]
+    widths = [max(width(row[i]) for row in rows) for i in range(len(header))]
+    lines = ["  ".join(cell + " " * (size - width(cell)) for cell, size in zip(row, widths)).rstrip()
+             for row in rows]
+    lines.insert(1, "  ".join("-" * size for size in widths))
+    return "\n".join(lines)
 
 
 def _line_order(line: LineLiteral, direction: Literal["up","down"]) -> list[int]:
@@ -620,7 +633,7 @@ class TrainData:
         text = f'【非アクティブ】{self.train_type.value} {self.destination or "不明"} 行き（{start} 発）\n'
         text += f'{self.train_formation}編成 {"プレミアムカー付き /" if self.has_premiumcar else ""}\n'
 
-        header = ["到着時刻","停車駅","ホーム番線"]
+        header = ["発車時刻","停車駅"]
         body:list[list[str]] = []
         for stop in self.stop_stations:
             if stop.time != None:
@@ -629,7 +642,7 @@ class TrainData:
                 body.append([f"出発駅",f"{stop.station}"])
             else:
                 body.append([f"不明",f"{stop.station}"])
-        return text + tabulate(body, header)
+        return text + _format_table(body, header)
 
 
 # train_type・direction・destination は、位置情報の値を入れる active_* のキーワード名
@@ -858,7 +871,7 @@ class ActiveTrainData(TrainData):
         f'{"プレミアムカー付き /" if self.has_premiumcar else ""}遅延：{self.delay_minutes} 分\n'
         text += f'次の停車駅は【{self.current_or_next_stop or "不明"}駅】\n\n' if not self.stopped_at else f"【{self.stopped_at}駅】に停車中\n\n"
 
-        header = ["到着時刻","停車駅","ホーム番線"]
+        header = ["発車時刻","停車駅"]
         body:list[list[str]] = []
         for stop in self.route_stations:
             if stop.time != None:
@@ -867,7 +880,7 @@ class ActiveTrainData(TrainData):
                 body.append([f"出発駅",f"{stop.station}"])
             else:
                 body.append([f"不明",f"{stop.station}"])
-        return text + tabulate(body,header)
+        return text + _format_table(body, header)
     
     def inactivate(self) -> TrainData:
         """非アクティブ化する際に実行。遅延・位置等のリアルタイム情報は削除される。"""

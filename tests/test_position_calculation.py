@@ -1,7 +1,7 @@
 import pytest
 
-from keihan_tracker.keihan_train import stations_map
-from keihan_tracker.keihan_train.position_calculation import calc_position
+from keihan_tracker.train import stations_map
+from keihan_tracker.train.position_calculation import calc_position
 
 from conftest import load_fixture
 

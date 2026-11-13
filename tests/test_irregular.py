@@ -13,7 +13,7 @@ import httpx
 import pytest
 
 from keihan_tracker import ActiveTrainData, KeihanAPIError, TrainData
-from keihan_tracker.keihan_train.tracker import JST
+from keihan_tracker.train.tracker import JST
 
 from conftest import load_fixture, load_fixture_bytes, make_position_list, run
 

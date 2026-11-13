@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from typing import Iterator, Optional, Union
 
-from .schemes import BusDiagram, BusDiagramStop
+from .schemas import BusDiagram, BusDiagramStop
 
 
 @dataclass

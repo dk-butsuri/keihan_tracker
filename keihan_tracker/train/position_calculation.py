@@ -1,7 +1,7 @@
 # GEMINI VIBE CODING
 
 from typing import Optional
-from .schemes import LineLiteral
+from .schemas import LineLiteral
 
 def calc_position(col: int, row: int) -> tuple[LineLiteral, int, Optional[int]]:
     """座標から、停車中の駅番号、もしくは2駅の駅番号を返します。"""

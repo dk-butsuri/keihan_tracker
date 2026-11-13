@@ -3,7 +3,7 @@
 壊れた本文（壊れたJSON・想定外の形式）は KeihanAPIError にする。
 """
 
-from .schemes import TransferGuideInfo, SelectStation, startTimeList, trainPositionList
+from .schemas import TransferGuideInfo, SelectStation, startTimeList, trainPositionList
 from pydantic import BaseModel
 import warnings
 from typing import TypeVar

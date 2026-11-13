@@ -294,4 +294,5 @@ step 5 は次の順に、1項目ずつ別のコミット（またはPR）にす�
 4. 位置まわりの改名、`position`、`status`、`find_trains` の `@overload`、比較（「9. 比較」）
    - 状況（2026-11-14）：済み。v2.9 で非推奨にした名前を全部消した（`wdfBlockNo=` の別名も）。`TrainStatus`（`STOPPED`・`PASSING`・`BETWEEN`・`UNKNOWN`）と `find_trains(status=)` を足した。同値性テストは期待値を変えずに通り、`status` が v2 の `is_stopping` と一致することも確かめた。`find_trains` の `@overload` は `active=True` のときだけ（走行中だけの条件の組み合わせは overload が増えすぎるため）。比較は「9. 比較」のとおり。`TrainType` は相手が `str` なら `TrainType` に直して比べる（`NotImplemented` を返すと文字コード順の比較にすり替わるため）
 5. `KHTrackerSync`、`watch`、駅の検索、バスの層分け、到着予測（signage の出力と一致することをテストで確かめる）。中身は「11. step 5・6 の仕様」の 5a〜5d
+   - 状況（2026-11-14）：済み（5a）。`git mv` で `train`・`schemas`・`bus/parse.py` に改名し、ライブラリ・テスト・確認用 GUI の import を更新した。旧モジュールの互換口は作らない。tabulate の依存を削除し、列車の表は日本語の文字幅を考慮した固定幅にした。仕様の StationData は現在は駅名だけを返すため維持し、実際に表を出している TrainData・ActiveTrainData を変更した。表の未使用のホーム番線列を省き、時刻の見出しを中身に合わせて発車時刻にした。
 6. README・RELIABILITY の更新、`MIGRATION.md`、`pyproject.toml`、3.0.0 リリース。中身は「11. step 5・6 の仕様」の 6

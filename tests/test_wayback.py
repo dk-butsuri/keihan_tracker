@@ -2,7 +2,7 @@ import hashlib
 import json
 
 from keihan_tracker import TrainType
-from keihan_tracker.keihan_train.schemes import trainPositionList
+from keihan_tracker.train.schemas import trainPositionList
 
 from conftest import WAYBACK_SNAPSHOTS, load_fixture_bytes
 

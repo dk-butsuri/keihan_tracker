@@ -4,7 +4,7 @@ import datetime
 import pytest
 
 from keihan_tracker import ActiveTrainData, DiaNotFoundError, KHTracker, StationData, TrainData, TrainType
-from keihan_tracker.keihan_train.tracker import JST, MIN_RATE_LIMIT, USER_AGENT, _parse_delay_minutes
+from keihan_tracker.train.tracker import JST, MIN_RATE_LIMIT, USER_AGENT, _parse_delay_minutes
 
 from conftest import load_fixture, make_position_list, make_tracker, run
 

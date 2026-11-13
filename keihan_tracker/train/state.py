@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from .schemes import (TransferGuideInfo,
+from .schemas import (TransferGuideInfo,
                       SelectStation,
                       startTimeList,
                       TrainInfo,

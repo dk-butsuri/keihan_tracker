@@ -78,7 +78,7 @@ def _train_info(timetable: dict, wdf: int) -> dict:
 def _naive_trains(station):
     """索引を使わない StationData.trains（v2.9 までの実装）"""
     import datetime as dt
-    from keihan_tracker.keihan_train.tracker import JST
+    from keihan_tracker.train.tracker import JST
     trains = []
     for train in station.master.trains.values():
         for stop in train.stop_stations:
@@ -91,7 +91,7 @@ def _naive_trains(station):
 def _naive_upcoming(station):
     """索引を使わない StationData.upcoming_trains"""
     import datetime as dt
-    from keihan_tracker.keihan_train.tracker import JST
+    from keihan_tracker.train.tracker import JST
     trains = []
     for train, stop in _naive_trains(station):
         if isinstance(train, ActiveTrainData):

@@ -11,7 +11,7 @@ import pytest
 from keihan_tracker import KeihanAPIError
 from keihan_tracker.bus import tracker as bus_tracker
 from keihan_tracker.bus.tracker import get_khbus_info
-from keihan_tracker.keihan_train.tracker import USER_AGENT
+from keihan_tracker.train.tracker import USER_AGENT
 
 from conftest import run
 

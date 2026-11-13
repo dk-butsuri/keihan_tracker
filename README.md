@@ -52,7 +52,7 @@
 pip install keihan-tracker
 ```
 
-Python 3.10 以上が必要です。依存パッケージ（pydantic・httpx・tabulate・tzdata）は一緒にインストールされます。
+Python 3.10 以上が必要です。依存パッケージ（pydantic・httpx・tzdata）は一緒にインストールされます。
 
 ## 使い方
 

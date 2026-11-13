@@ -18,7 +18,7 @@ import httpx
 import pytest
 
 from keihan_tracker import KHTracker
-from keihan_tracker.keihan_train.tracker import JST
+from keihan_tracker.train.tracker import JST
 
 FIXTURES = Path(__file__).parent / "fixtures"
 WAYBACK_SNAPSHOTS = json.loads((FIXTURES / "wayback" / "manifest.json").read_text(encoding="utf-8"))["snapshots"]

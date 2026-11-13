@@ -6,7 +6,7 @@ v2.9 で非推奨にした名前は v3 で消えた。消えた名前が Attribu
 import pytest
 
 from keihan_tracker import ActiveTrainData, KHTracker, TrainData, TrainPosition, TrainStatus
-from keihan_tracker.keihan_train.tracker import TrainHistoryRecord
+from keihan_tracker.train.tracker import TrainHistoryRecord
 
 
 def _active_train(tracker) -> ActiveTrainData:
