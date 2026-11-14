@@ -219,7 +219,7 @@ async with BusClient() as client:
 
 到着予測は `tracker.eta()` または `estimate_arrival(..., now=...)` へまとめられます。
 `EtaPolicy` で係数・閾値を変え、予測しない理由は `EtaResult.reason` で扱えます。時刻の元は発車時刻です。
-[README](README.md#3-遅延を加味した停車駅の時刻の推定) に使い方、[比較記録](docs/ETA_SIGNAGE.md) に signage と一致しなかった全件へのリンクがあります。
+[使い方](docs/USAGE.md#3-遅延を加味した停車駅の時刻の推定) に使い方の例、[比較記録](docs/ETA_SIGNAGE.md) に signage と一致しなかった全件へのリンクがあります。
 
 tabulate への依存を削除しました。`TrainData`・`ActiveTrainData` の文字列表は固定幅になり、時刻の見出しは発車時刻、空だったホーム番線列は省いています。
 `StationData.__str__` は駅名のままです。パッケージ設定は `setup.py` から `pyproject.toml` に移しました。
