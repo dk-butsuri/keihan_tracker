@@ -1,6 +1,14 @@
 # keihan_tracker
 
+[![PyPI](https://img.shields.io/pypi/v/keihan-tracker?logo=pypi&logoColor=white)](https://pypi.org/project/keihan-tracker/)
+[![Python](https://img.shields.io/pypi/pyversions/keihan-tracker?logo=python&logoColor=white)](https://pypi.org/project/keihan-tracker/)
+[![Test](https://github.com/dk-butsuri/keihan_tracker/actions/workflows/test.yml/badge.svg)](https://github.com/dk-butsuri/keihan_tracker/actions/workflows/test.yml)
+[![Typed](https://img.shields.io/badge/typing-typed-blue)](https://peps.python.org/pep-0561/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green)](https://github.com/dk-butsuri/keihan_tracker/blob/main/LICENSE)
+
 京阪電車の列車位置・遅れ・ダイヤと、京阪バスの接近情報を Python で扱う非公式ライブラリです。
+
+**同期・非同期どちらでも** ／ **型ヒントつき** ／ **通信なしでテストできる層分け** ／ **公式サイトに優しいレート制限つき**
 
 > [!WARNING]
 > 京阪の公式サイトが使っているデータを読み取る**非公式**のライブラリです。公式の仕様変更で動かなくなることがあります。
@@ -8,11 +16,13 @@
 
 ## できること
 
-- 走っている列車の位置・種別・行先・遅れを取る
-- 駅に「これから来る列車」を時刻順に並べる（発車標が作れます）
-- 遅れを加味して、駅に着く時刻を予測する
-- 「〇〇には先着」のように、先に着く列車を調べる
-- 京阪バスの接近情報と、便ごとの時刻表を取る
+| 機能 | 内容 |
+|:---|:---|
+| 🚃 **列車の今** | 走っている列車の位置・種別・行先・遅れ |
+| 🪧 **発車標** | 駅に「これから来る列車」を時刻順に |
+| ⏱️ **到着予測** | 遅れを加味して、駅に着く時刻を推定 |
+| 🏁 **先着** | 「〇〇には先着」のように、先に着く列車を調べる |
+| 🚌 **京阪バス** | 接近情報（到着予定・遅れ）と、便ごとの時刻表 |
 
 ## インストール
 
@@ -58,6 +68,17 @@ async def main():
             print(train.train_number, train.train_type.value, f"{train.delay_minutes}分遅れ")
 
 asyncio.run(main())
+```
+
+バスも同じように取れます。
+
+```python
+from keihan_tracker import BusClient
+
+async def main():
+    async with BusClient() as client:
+        for bus in await client.arrivals("京阪香里園", 1):   # バス停名と、のりば番号
+            print(bus.route, bus.destination, bus.expected or bus.scheduled, bus.status.value)
 ```
 
 ## もっと知りたいとき

@@ -68,6 +68,8 @@ policy = EtaPolicy(discount_rate=0, stuck_minutes=20)
 prediction = tracker.eta(train, station, policy)
 ```
 
+推定時刻が今より前になることがあります（まだ通っていない駅でも、公式の遅れが実際より小さいとき）。列車はもうすぐ来るので、表示では「まもなく」などにしてください。
+
 取得を自前で行う場合は `estimate_arrival(train, station, now=タイムゾーン付き日時, policy=EtaPolicy())` を使えます。
 関数自身は通信も時計の参照もしません。
 
