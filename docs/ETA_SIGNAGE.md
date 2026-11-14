@@ -19,7 +19,7 @@ signage は `int((estimated_time - now).total_seconds() / 60) < 0` で、当駅�
 今回の単独の予測関数は、経路上でまだ通っていない駅について補正時刻を返す。この470組はすべて予測時刻が now より1分以上前で、signage 側は行なし、ライブラリ側は時刻あり・reason=None。
 補正式や表示範囲の違いによる不一致はなかった。仕様の「一致しないところは直さず一覧にして報告する」に従い、この差は変えていない。
 
-全件は [differences.csv](../tests/fixtures/eta/differences.csv) に、入力の snapshot・WDF番号・対象駅番号・now と、signage / ライブラリの出力を並べた。
+不一致の全件（入力の snapshot・WDF番号・対象駅番号・now と、両方の出力）は下の signage.json.gz に入っている。
 比較元の全入力・期待値、差の一覧、参照コードの SHA-256、参照した関数名、signage 側の境界値テストの入力と期待値は [signage.json.gz](../tests/fixtures/eta/signage.json.gz) に保存した。
 既存の同値性テストのゴールデンは変更していない。
 
