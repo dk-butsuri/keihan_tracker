@@ -214,6 +214,19 @@ async with BusClient() as client:
     info = await client.get_info("京阪香里園", 1)
 ```
 
+接近情報を使いやすい形で受け取る `BusClient.arrivals()` を足しました。時刻は日付つきの `datetime`、状態は `BusStatus`、系統番号は括弧なしです。
+
+```python
+# v2.9: 文字列を自分で読む
+for bus in info.body.busstates:
+    print(bus.busstateprms.route, bus.busstateprms.timetable, bus.delay_text)
+
+# v3.0
+async with BusClient() as client:
+    for bus in await client.arrivals("京阪香里園", 1):
+        print(bus.route, bus.expected or bus.scheduled, bus.status)
+```
+
 `parse_busstate`・`parse_diagram` は直下から import でき、通信なしで使えます。
 スナップショットの形式・ファイル名は変更していません。
 

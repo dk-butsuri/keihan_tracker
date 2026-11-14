@@ -9,6 +9,7 @@ import urllib.parse
 from pathlib import Path
 from typing import Optional
 
+from .arrivals import BusArrival, to_arrivals
 from .parse import parse_busstate, parse_diagram, UPDATE_URL
 from .schemas import BusDiagram, BusLocationResponse
 from ..train.client import USER_AGENT, write_snapshot
@@ -61,6 +62,10 @@ class BusClient:
     async def get_info(self, stop_name: str, stop_num: int = 1) -> BusLocationResponse:
         """接近情報を取得する。同じバス停・のりばは30秒キャッシュする。"""
         return await self._get_info(stop_name, stop_num, self.snapshot_dir)
+
+    async def arrivals(self, stop_name: str, stop_num: int = 1) -> list[BusArrival]:
+        """接近情報を取得し、BusArrival のリスト（接近順）で返す。キャッシュは get_info と同じ。"""
+        return to_arrivals(await self.get_info(stop_name, stop_num))
 
     async def _get_info(
             self, stop_name: str, stop_num: int, snapshot_dir: Optional[str | Path],

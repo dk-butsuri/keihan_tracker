@@ -102,13 +102,33 @@ prediction = tracker.eta(train, station, policy)
 
 ```python
 import asyncio
-from keihan_tracker import BusClient
+from keihan_tracker import BusClient, BusStatus
 
 async def main():
+    async with BusClient() as client:
+        for bus in await client.arrivals("京阪香里園", 1):   # バス停名と、のりば番号
+            when = bus.expected or bus.scheduled           # 到着予定（定刻＋遅れ）、分からなければ定刻
+            print(bus.route, bus.destination, when and when.strftime("%H:%M"), bus.status.value, bus.delay_minutes)
+
+asyncio.run(main())
+```
+
+`arrivals()` は接近順の `BusArrival` のリストを返します。時刻は日付つきの `datetime`（JST）です。
+
+| `status` | 意味 | `expected` | `delay_minutes` |
+|:---|:---|:---|:---|
+| `TRACKED` | 位置を受信している（定時運行中・約N分遅れ） | 到着予定 | 遅れ（定時なら0） |
+| `ARRIVED` | 到着済 | 到着予定だった時刻 | `None` |
+| `NOT_TRACKED` | 位置を受信していない（定刻だけ分かる） | `None` | `None` |
+| `UNKNOWN` | 見たことのない表記（警告を出す） | 公式に到着予定があればその時刻 | `None` |
+
+公式の生の値は `bus.raw`（`BusState`）にあります。`get_info()` で公式の形のまま受け取ることもできます。
+便ごとの時刻表は `dgmpl` を `fetch_diagram()` に渡して取ります。
+
+```python
+async def main():
     async with BusClient(snapshot_dir="snapshots") as client:
-        bus_info = await client.get_info("京阪香里園", 1)
-        for bus in bus_info.body.busstates:
-            print(bus.busstateprms.destination, bus.delay_minutes, bus.delay_text)
+        for bus in await client.arrivals("京阪香里園", 1):
             if bus.dgmpl is not None:
                 diagram = await client.fetch_diagram(bus.dgmpl)
                 for stop in diagram.stops:

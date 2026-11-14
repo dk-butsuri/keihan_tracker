@@ -62,7 +62,7 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 
 `KHState(date=None)` は通信も時計も持ちません。`apply_stations()` → `apply_positions()` → `apply_timetable()` で更新し、`station()` などで読み取ります。
 
-`BusClient(snapshot_dir=None)` は `get_info(stop_name, stop_num=1)`・`fetch_diagram(dgmpl)`・`aclose()` と `async with` を使います。
+`BusClient(snapshot_dir=None)` は `arrivals(stop_name, stop_num=1)`・`get_info(stop_name, stop_num=1)`・`fetch_diagram(dgmpl)`・`aclose()` と `async with` を使います。
 クライアントと30秒キャッシュはインスタンスごとです。同じイベントループで使い続けてください。
 `get_khbus_info()`・モジュール関数の `fetch_diagram()` は直下からも import でき、共通キャッシュを使いながら通信ごとにクライアントを開閉します。
 
@@ -185,6 +185,24 @@ KHTracker(rate_limit: float = 30, snapshot_dir: str | Path | None = None)
 - destination: Optional[StationData]: 行先駅
 - line: LineLiteral: その時点で走っていた路線
 - position: TrainPosition: その時点の線路上の位置（`ActiveTrainData.position` と同じ）
+
+## BusArrival / BusStatus (バス)
+
+`BusClient.arrivals(stop_name, stop_num=1)` と `to_arrivals(response)`（通信なし）が返す、バス停に来る1便です。`frozen=True` の dataclass です。
+
+- `route: str`: 系統番号（公式の `"[22]"` の括弧を外した `"22"`）。`"22B"`・`"直Ｑ"`・`"くるり"`・`"---"` のように数字でないこともある
+- `destination: str`: 行先（例: `"京阪香里園行"`）
+- `via: str`: 経由
+- `scheduled: Optional[datetime]`: 定刻（JST）
+- `expected: Optional[datetime]`: 到着予定（公式の「HH:MM 到着予定」）。位置を受信していない便は `None`
+- `delay_minutes: Optional[int]`: 遅れ（分）。定時運行中なら0。未受信・到着済・読めない表記なら `None`
+- `status: BusStatus`: `TRACKED`（位置を受信中）・`ARRIVED`（到着済）・`NOT_TRACKED`（未受信）・`UNKNOWN`（読めない表記）
+- `order: int`: 接近順位
+- `lat`, `lon`: バスの位置
+- `dgmpl: Optional[str]`: `fetch_diagram()` に渡す値
+- `raw: BusState`: 元の公式の値
+
+日付は接近情報の作成時刻（`datetimeStr`）に最も近い日を付けます（23:50 の接近情報にある 00:10 の便は翌日）。作成時刻が読めなければ時刻は `None` です。
 
 ## BusLocationResponse / BusStatePrms (バス)
 バス接近情報のレスポンスモデル。
